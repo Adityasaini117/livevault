@@ -1,10 +1,14 @@
-"""StockPilot AI - MCP Server.
+"""LifeVault - MCP Server.
 
-Provides inventory and workshop assistance tools over Streamable HTTP transport.
+Provides voice-first life-admin assistant tools over Streamable HTTP transport.
+Exposed to Alexa+ as an MCP server.
 """
 
+import calendar
+from datetime import date, datetime, timedelta
 from pathlib import Path
 import sys
+from typing import Optional
 
 # Ensure local imports work regardless of execution working directory
 server_dir = Path(__file__).resolve().parent
@@ -17,48 +21,254 @@ try:
 except ImportError:
     from mcp.server.fastmcp import FastMCP
 
-from storage import SqliteStorage
+from storage import SqliteStorage, VALID_TYPES
 
 # Initialize storage and MCP server
 storage = SqliteStorage()
-mcp = FastMCP("StockPilot")
+mcp = FastMCP("LifeVault")
+
+
+def _add_months(source_date: date, months: int) -> date:
+    """Accurately add months to a given date, preserving end-of-month bounds."""
+    month = source_date.month - 1 + months
+    year = source_date.year + month // 12
+    month = month % 12 + 1
+    max_day = calendar.monthrange(year, month)[1]
+    day = min(source_date.day, max_day)
+    return date(year, month, day)
+
+
+def _format_clarification(options: list[str]) -> str:
+    """Format multiple matches into a clean speech-friendly clarifying question."""
+    if len(options) == 2:
+        return f"Did you mean {options[0]} or {options[1]}?"
+    return f"Did you mean {', '.join(options[:-1])}, or {options[-1]}?"
 
 
 @mcp.tool()
 def ping() -> str:
-    """Return health check status for StockPilot."""
-    return "StockPilot is alive"
+    """Return health check status for LifeVault."""
+    return "LifeVault is alive"
 
 
 @mcp.tool()
-def check_stock(part: str) -> str:
-    """Check current stock level and reorder threshold for a part name or SKU."""
-    clean_part = part.strip()
-    if not clean_part:
-        return "Please specify a part name or SKU to check."
+def add_record(
+    type: str,
+    name: str,
+    amount: Optional[float] = None,
+    purchase_date: Optional[str] = None,
+    warranty_months: Optional[int] = None,
+    renewal_cycle: Optional[str] = None,
+    vendor: Optional[str] = None,
+    notes: Optional[str] = None,
+) -> str:
+    """Add a life-admin record (warranty, subscription, insurance, bill, document).
 
-    # Check for exact match by SKU or exact name first
-    exact_match = storage.get_part(clean_part)
-    if exact_match:
-        return f"You have {exact_match['qty']} {exact_match['name']}. Reorder level is {exact_match['reorder_level']}."
+    Computes expiry date and reminder date when warranty_months is supplied.
+    """
+    clean_type = type.strip().lower()
+    clean_name = name.strip()
 
-    # Perform partial case-insensitive search
-    matches = storage.search_parts(clean_part)
+    if not clean_name:
+        return "Please provide a name for the record."
 
+    if clean_type not in VALID_TYPES:
+        return "Please specify a valid record type: warranty, subscription, insurance, bill, or document."
+
+    if amount is not None and amount < 0:
+        return "Amount cannot be negative."
+
+    # Validate or default purchase date
+    if purchase_date:
+        try:
+            p_date = date.fromisoformat(purchase_date.strip())
+        except ValueError:
+            return "Please provide purchase_date in YYYY-MM-DD format."
+    else:
+        p_date = date.today()
+
+    expiry_date_str = None
+    reminder_date_str = None
+
+    if warranty_months is not None:
+        if warranty_months < 0:
+            return "Warranty months cannot be negative."
+        expiry_d = _add_months(p_date, warranty_months)
+        reminder_d = expiry_d - timedelta(days=30)
+        expiry_date_str = expiry_d.isoformat()
+        reminder_date_str = reminder_d.isoformat()
+
+    record_data = {
+        "type": clean_type,
+        "name": clean_name,
+        "vendor": vendor.strip() if vendor else None,
+        "amount": round(float(amount), 2) if amount is not None else None,
+        "currency": "USD",
+        "purchase_date": p_date.isoformat(),
+        "expiry_date": expiry_date_str,
+        "renewal_cycle": renewal_cycle.strip() if renewal_cycle else None,
+        "reminder_date": reminder_date_str,
+        "notes": notes.strip() if notes else None,
+    }
+
+    created = storage.add_record(record_data)
+
+    if expiry_date_str and reminder_date_str:
+        return (
+            f"Saved {created['name']}. The warranty expires on {expiry_date_str}, "
+            f"and a reminder is set for {reminder_date_str}."
+        )
+
+    return f"Saved {created['name']} as a {clean_type}."
+
+
+@mcp.tool()
+def find_record(query: str) -> str:
+    """Find records matching a search query by name, vendor, or notes."""
+    clean_query = query.strip()
+    if not clean_query:
+        return "Please specify what record to find."
+
+    matches = storage.search_records(clean_query)
     if not matches:
-        return f"I couldn't find any parts matching '{clean_part}'."
+        return f"I couldn't find any records matching '{clean_query}'."
 
     if len(matches) == 1:
         match = matches[0]
-        return f"You have {match['qty']} {match['name']}. Reorder level is {match['reorder_level']}."
+        details = [f"Found {match['name']}, a {match['type']}"]
+        if match.get("vendor"):
+            details.append(f"from {match['vendor']}")
+        if match.get("expiry_date"):
+            details.append(f"expiring on {match['expiry_date']}")
+        elif match.get("amount"):
+            details.append(f"amounting to ${match['amount']:.2f}")
+        return " ".join(details) + "."
 
-    # Multiple matches: ask user to clarify between options
     names = [m["name"] for m in matches]
-    if len(names) == 2:
-        return f"Did you mean {names[0]} or {names[1]}?"
+    return _format_clarification(names)
+
+
+@mcp.tool()
+def warranty_status(item: str) -> str:
+    """Check if an item is under warranty, expiry date, and days remaining or past."""
+    clean_item = item.strip()
+    if not clean_item:
+        return "Please specify an item to check warranty status."
+
+    # Search for matching records, prioritizing warranty types
+    all_matches = storage.search_records(clean_item)
+    warranty_matches = [m for m in all_matches if m["type"] == "warranty"]
+
+    if not warranty_matches:
+        if all_matches:
+            return f"I found {all_matches[0]['name']}, but it is not tracked as a warranty."
+        return f"I couldn't find any warranty records for '{clean_item}'."
+
+    if len(warranty_matches) > 1:
+        names = [m["name"] for m in warranty_matches]
+        return _format_clarification(names)
+
+    match = warranty_matches[0]
+    expiry_str = match.get("expiry_date")
+    if not expiry_str:
+        return f"Your {match['name']} is on file, but has no expiry date recorded."
+
+    expiry_date = date.fromisoformat(expiry_str)
+    today = date.today()
+    delta_days = (expiry_date - today).days
+
+    if delta_days >= 0:
+        return f"Your {match['name']} is under warranty until {expiry_str}, with {delta_days} days remaining."
+
+    days_ago = abs(delta_days)
+    return f"The warranty for your {match['name']} expired on {expiry_str}, {days_ago} days ago."
+
+
+@mcp.tool()
+def upcoming_deadlines(days: int = 30) -> str:
+    """List warranties, renewals, bills, and document expiries due in the next N days."""
+    if days <= 0:
+        return "Please specify a positive number of days."
+
+    upcoming = storage.list_upcoming(days)
+    if not upcoming:
+        return f"You have no upcoming deadlines in the next {days} days."
+
+    total = len(upcoming)
+    display_items = upcoming[:5]
+    spoken_list = [f"{item['name']} on {item['expiry_date']}" for item in display_items]
+
+    if total <= 5:
+        return f"You have {total} upcoming deadline{'s' if total != 1 else ''}: {', '.join(spoken_list)}."
+
+    remaining = total - 5
+    return f"You have {total} upcoming deadlines: {', '.join(spoken_list)}, and {remaining} more."
+
+
+@mcp.tool()
+def spending_summary(period: str) -> str:
+    """Summarize spending total and top category for 'this month', 'last month', or 'this year'."""
+    clean_period = period.strip().lower()
+    today = date.today()
+
+    if clean_period == "this month":
+        start_date = date(today.year, today.month, 1)
+        end_date = today
+    elif clean_period == "last month":
+        if today.month == 1:
+            lm_year = today.year - 1
+            lm_month = 12
+        else:
+            lm_year = today.year
+            lm_month = today.month - 1
+        _, last_day = calendar.monthrange(lm_year, lm_month)
+        start_date = date(lm_year, lm_month, 1)
+        end_date = date(lm_year, lm_month, last_day)
+    elif clean_period == "this year":
+        start_date = date(today.year, 1, 1)
+        end_date = today
     else:
-        options = ", ".join(names[:-1]) + f", or {names[-1]}"
-        return f"Did you mean {options}?"
+        return "Please specify 'this month', 'last month', or 'this year' for spending summary."
+
+    summary = storage.spending_by_period(start_date.isoformat(), end_date.isoformat())
+
+    if summary["total"] <= 0:
+        return f"You have no recorded spending for {clean_period}."
+
+    top_cat = summary["top_category"] or "general"
+    top_amt = summary["top_amount"]
+    return (
+        f"You spent ${summary['total']:.2f} {clean_period}, with {top_cat} "
+        f"being your highest category at ${top_amt:.2f}."
+    )
+
+
+@mcp.tool()
+def delete_record(name: str, confirm: bool = False) -> str:
+    """Delete a record by name. Requires confirm=True to permanently delete."""
+    clean_name = name.strip()
+    if not clean_name:
+        return "Please specify the name of the record to delete."
+
+    matches = storage.search_records(clean_name)
+    if not matches:
+        return f"I couldn't find any record matching '{clean_name}'."
+
+    # Check for exact case-insensitive match first to narrow options
+    exact_matches = [m for m in matches if m["name"].lower() == clean_name.lower()]
+    if len(exact_matches) == 1:
+        target = exact_matches[0]
+    elif len(matches) > 1:
+        names = [m["name"] for m in matches]
+        return _format_clarification(names)
+    else:
+        target = matches[0]
+
+    if not confirm:
+        return f"Are you sure you want to delete the record for {target['name']}? Please confirm to proceed."
+
+    storage.delete_record(target["id"])
+    return f"The record for {target['name']} has been deleted."
 
 
 if __name__ == "__main__":

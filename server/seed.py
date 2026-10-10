@@ -1,185 +1,386 @@
-"""Seed script for StockPilot AI.
+"""Seed script for LifeVault.
 
-Populates the SQLite database with realistic repair-workshop data:
-- 30 parts (including brake pads, oil filters, spark plugs, steel & zinc 10mm bolts)
-- 10 jobs (including Job 51 and a mix of open/done)
-- 90 days of realistic usage history
-- Brake pads seeded with stock level just above reorder level for demo flow
+Populates the SQLite database with realistic life-admin records:
+- Warranties (laptop, phone, headphones, fridge)
+- Subscriptions (Netflix, Spotify, gym, cloud storage, prime)
+- Insurance (auto, health, home, pet)
+- Bills (electric, internet, mobile phone, water, gas)
+- Documents (passport, driver license, Global Entry)
+
+All dates are generated dynamically relative to date.today() so that
+deadlines are always upcoming and spending summaries work reliably.
 """
 
-from datetime import datetime, timezone, timedelta
+from datetime import date, timedelta
 from pathlib import Path
 import random
-import sqlite3
+from typing import Optional
 
 from storage import SqliteStorage
 
 
-def seed_database(db_path: str = None) -> None:
-    """Recreates and populates the database with realistic seed data."""
-    # Fixed random seed for deterministic generation
+def seed_database(db_path: Optional[str] = None) -> None:
+    """Recreate and populate the LifeVault database with ~25 realistic records."""
     random.seed(42)
 
     storage = SqliteStorage(db_path=db_path)
     storage.init_db(drop_existing=True)
 
-    # 1. 30 Parts
-    parts_data = [
-        # Brake pads: stock level just above reorder level for demo
-        ("BP-CER-001", "Front Ceramic Brake Pads", "Brakes", 11, 10, 42.50, "Akebono"),
-        ("BP-MET-002", "Rear Semi-Metallic Brake Pads", "Brakes", 9, 8, 34.00, "Brembo"),
-        # Ambiguous 10mm bolts in steel AND zinc
-        ("BLT-10MM-STL", "10mm Bolt (Steel)", "Fasteners", 120, 50, 0.45, "Fastenal"),
-        ("BLT-10MM-ZNC", "10mm Bolt (Zinc)", "Fasteners", 95, 50, 0.55, "Fastenal"),
-        # Filters and Oils (High usage)
-        ("FLT-OIL-SPN", "Oil Filter (Spin-On)", "Filters", 24, 12, 6.50, "Wix Filters"),
-        ("FLT-OIL-CRT", "Oil Filter (Cartridge)", "Filters", 18, 10, 8.20, "Wix Filters"),
-        ("OIL-5W30-SYN", "Full Synthetic 5W-30 Motor Oil (1 Qt)", "Fluids", 65, 30, 7.99, "Valvoline"),
-        ("OIL-0W20-SYN", "Full Synthetic 0W-20 Motor Oil (1 Qt)", "Fluids", 48, 25, 8.50, "Mobil 1"),
-        ("FLT-AIR-ENG", "Engine Air Filter", "Filters", 15, 8, 14.50, "Fram"),
-        ("FLT-AIR-CAB", "Cabin Air Filter", "Filters", 14, 8, 12.00, "Fram"),
-        # Ignition
-        ("SPK-IRD-001", "Spark Plug (Iridium)", "Ignition", 36, 20, 9.00, "NGK"),
-        ("SPK-PLT-002", "Spark Plug (Platinum)", "Ignition", 22, 16, 6.50, "Bosch"),
-        ("IGN-COIL-01", "Ignition Coil Pack", "Ignition", 12, 6, 42.00, "Delphi"),
-        # Wipers
-        ("WPR-BLD-20", "Wiper Blade 20-Inch", "Wipers", 14, 6, 11.00, "Rain-X"),
-        ("WPR-BLD-22", "Wiper Blade 22-Inch", "Wipers", 12, 6, 11.50, "Rain-X"),
-        ("WPR-BLD-24", "Wiper Blade 24-Inch", "Wipers", 10, 6, 12.00, "Rain-X"),
-        # Electrical & Batteries
-        ("BAT-12V-AGM", "12V AGM Car Battery", "Electrical", 7, 4, 145.00, "Interstate Batteries"),
-        ("BAT-12V-STD", "12V Standard Lead-Acid Battery", "Electrical", 6, 4, 105.00, "Interstate Batteries"),
-        ("ALT-130A-REM", "Alternator 130A (Reman)", "Electrical", 3, 2, 185.00, "Denso"),
-        ("STR-MTR-REM", "Starter Motor (Reman)", "Electrical", 4, 2, 165.00, "Denso"),
-        # Rotors & Suspension
-        ("RTR-FRT-VNT", "Front Vented Brake Rotor", "Brakes", 8, 6, 48.00, "Brembo"),
-        ("RTR-RR-SLD", "Rear Solid Brake Rotor", "Brakes", 8, 6, 38.00, "Brembo"),
-        ("WHL-BRG-HUB", "Wheel Bearing Hub Assembly", "Suspension", 5, 3, 89.00, "Timken"),
-        # Fluids
-        ("FLD-BRK-DOT4", "DOT 4 Brake Fluid (32 oz)", "Fluids", 16, 8, 9.25, "Prestone"),
-        ("FLD-CLN-5050", "Universal 50/50 Antifreeze/Coolant (1 Gal)", "Fluids", 20, 10, 15.00, "Prestone"),
-        ("FLD-TRN-ATF", "Automatic Transmission Fluid (1 Qt)", "Fluids", 28, 12, 11.00, "Castrol"),
-        # Engine accessories & sensors
-        ("BLT-SERP-6PK", "Serpentine Belt 6PK1200", "Belts", 8, 4, 21.00, "Gates"),
-        ("RAD-HSE-UPR", "Radiator Hose (Upper)", "Cooling", 7, 4, 18.50, "Continental"),
-        ("SNS-O2-UP", "Oxygen Sensor (Upstream)", "Sensors", 5, 3, 62.00, "Bosch"),
-        ("FLT-FUEL-INL", "In-Line Fuel Filter", "Filters", 9, 5, 16.50, "Wix Filters"),
+    today = date.today()
+
+    records = [
+        # --- WARRANTIES ---
+        # 1. Laptop warranty expiring in ~20 days
+        {
+            "type": "warranty",
+            "name": "MacBook Pro 16-inch",
+            "vendor": "Apple",
+            "amount": 2499.00,
+            "currency": "USD",
+            "purchase_date": (today - timedelta(days=710)).isoformat(),
+            "expiry_date": (today + timedelta(days=20)).isoformat(),
+            "renewal_cycle": None,
+            "reminder_date": (today - timedelta(days=10)).isoformat(),
+            "notes": "AppleCare+ expiring in 20 days",
+        },
+        # 2. Second laptop for ambiguity testing
+        {
+            "type": "warranty",
+            "name": "Dell XPS 15 Laptop",
+            "vendor": "Dell",
+            "amount": 1799.00,
+            "currency": "USD",
+            "purchase_date": (today - timedelta(days=180)).isoformat(),
+            "expiry_date": (today + timedelta(days=550)).isoformat(),
+            "renewal_cycle": None,
+            "reminder_date": (today + timedelta(days=520)).isoformat(),
+            "notes": "Dell Premium Support 2-year warranty",
+        },
+        # 3. Smartphone warranty
+        {
+            "type": "warranty",
+            "name": "iPhone 15 Pro",
+            "vendor": "Apple",
+            "amount": 999.00,
+            "currency": "USD",
+            "purchase_date": (today - timedelta(days=120)).isoformat(),
+            "expiry_date": (today + timedelta(days=245)).isoformat(),
+            "renewal_cycle": None,
+            "reminder_date": (today + timedelta(days=215)).isoformat(),
+            "notes": "Standard 1-year Apple limited warranty",
+        },
+        # 4. Expired headphones warranty
+        {
+            "type": "warranty",
+            "name": "Sony WH-1000XM5 Headphones",
+            "vendor": "Sony",
+            "amount": 399.99,
+            "currency": "USD",
+            "purchase_date": (today - timedelta(days=400)).isoformat(),
+            "expiry_date": (today - timedelta(days=35)).isoformat(),
+            "reminder_date": (today - timedelta(days=65)).isoformat(),
+            "notes": "1-year warranty expired 35 days ago",
+        },
+        # 5. Earbuds warranty active
+        {
+            "type": "warranty",
+            "name": "Bose QuietComfort Earbuds",
+            "vendor": "Bose",
+            "amount": 279.00,
+            "currency": "USD",
+            "purchase_date": (today - timedelta(days=90)).isoformat(),
+            "expiry_date": (today + timedelta(days=275)).isoformat(),
+            "reminder_date": (today + timedelta(days=245)).isoformat(),
+            "notes": "1-year manufacturer warranty",
+        },
+        # 6. Major appliance warranty
+        {
+            "type": "warranty",
+            "name": "Samsung French Door Refrigerator",
+            "vendor": "Samsung",
+            "amount": 1499.00,
+            "currency": "USD",
+            "purchase_date": (today - timedelta(days=300)).isoformat(),
+            "expiry_date": (today + timedelta(days=430)).isoformat(),
+            "renewal_cycle": None,
+            "reminder_date": (today + timedelta(days=400)).isoformat(),
+            "notes": "2-year compressor and parts warranty",
+        },
+
+        # --- SUBSCRIPTIONS ---
+        # 7. Gym membership renewing in ~5 days
+        {
+            "type": "subscription",
+            "name": "Equinox Gym Membership",
+            "vendor": "Equinox",
+            "amount": 220.00,
+            "currency": "USD",
+            "purchase_date": (today - timedelta(days=25)).isoformat(),
+            "expiry_date": (today + timedelta(days=5)).isoformat(),
+            "renewal_cycle": "monthly",
+            "reminder_date": (today - timedelta(days=5)).isoformat(),
+            "notes": "Monthly recurring auto-debit renewing in 5 days",
+        },
+        # 8. Netflix streaming
+        {
+            "type": "subscription",
+            "name": "Netflix Premium",
+            "vendor": "Netflix",
+            "amount": 22.99,
+            "currency": "USD",
+            "purchase_date": (today - timedelta(days=14)).isoformat(),
+            "expiry_date": (today + timedelta(days=16)).isoformat(),
+            "renewal_cycle": "monthly",
+            "reminder_date": (today - timedelta(days=14)).isoformat(),
+            "notes": "4K Ultra HD 4-screen streaming plan",
+        },
+        # 9. Spotify music
+        {
+            "type": "subscription",
+            "name": "Spotify Family",
+            "vendor": "Spotify",
+            "amount": 16.99,
+            "currency": "USD",
+            "purchase_date": (today - timedelta(days=8)).isoformat(),
+            "expiry_date": (today + timedelta(days=22)).isoformat(),
+            "renewal_cycle": "monthly",
+            "reminder_date": (today - timedelta(days=8)).isoformat(),
+            "notes": "Family plan up to 6 accounts",
+        },
+        # 10. Cloud storage
+        {
+            "type": "subscription",
+            "name": "Google One Cloud Storage",
+            "vendor": "Google",
+            "amount": 99.99,
+            "currency": "USD",
+            "purchase_date": (today - timedelta(days=200)).isoformat(),
+            "expiry_date": (today + timedelta(days=165)).isoformat(),
+            "renewal_cycle": "yearly",
+            "reminder_date": (today + timedelta(days=135)).isoformat(),
+            "notes": "2TB annual storage and VPN plan",
+        },
+        # 11. Amazon Prime
+        {
+            "type": "subscription",
+            "name": "Amazon Prime",
+            "vendor": "Amazon",
+            "amount": 139.00,
+            "currency": "USD",
+            "purchase_date": (today - timedelta(days=280)).isoformat(),
+            "expiry_date": (today + timedelta(days=85)).isoformat(),
+            "renewal_cycle": "yearly",
+            "reminder_date": (today + timedelta(days=55)).isoformat(),
+            "notes": "Annual delivery and Prime Video membership",
+        },
+        # 12. Expired subscription
+        {
+            "type": "subscription",
+            "name": "The Athletic Sports",
+            "vendor": "The New York Times",
+            "amount": 36.00,
+            "currency": "USD",
+            "purchase_date": (today - timedelta(days=400)).isoformat(),
+            "expiry_date": (today - timedelta(days=35)).isoformat(),
+            "renewal_cycle": "yearly",
+            "reminder_date": (today - timedelta(days=65)).isoformat(),
+            "notes": "Canceled annual sports subscription",
+        },
+
+        # --- INSURANCE ---
+        # 13. Auto insurance renewing in ~40 days
+        {
+            "type": "insurance",
+            "name": "GEICO Auto Insurance",
+            "vendor": "GEICO",
+            "amount": 540.00,
+            "currency": "USD",
+            "purchase_date": (today - timedelta(days=140)).isoformat(),
+            "expiry_date": (today + timedelta(days=40)).isoformat(),
+            "renewal_cycle": "6-month",
+            "reminder_date": (today + timedelta(days=10)).isoformat(),
+            "notes": "Comprehensive and collision coverage renewing in 40 days",
+        },
+        # 14. Health insurance
+        {
+            "type": "insurance",
+            "name": "Blue Cross Blue Shield Health",
+            "vendor": "Blue Cross",
+            "amount": 340.00,
+            "currency": "USD",
+            "purchase_date": (today - timedelta(days=10)).isoformat(),
+            "expiry_date": (today + timedelta(days=20)).isoformat(),
+            "renewal_cycle": "monthly",
+            "reminder_date": (today - timedelta(days=10)).isoformat(),
+            "notes": "Individual PPO gold health plan",
+        },
+        # 15. Homeowners insurance
+        {
+            "type": "insurance",
+            "name": "Travelers Home Insurance",
+            "vendor": "Travelers",
+            "amount": 1150.00,
+            "currency": "USD",
+            "purchase_date": (today - timedelta(days=250)).isoformat(),
+            "expiry_date": (today + timedelta(days=115)).isoformat(),
+            "renewal_cycle": "yearly",
+            "reminder_date": (today + timedelta(days=85)).isoformat(),
+            "notes": "Annual homeowner and hazard policy",
+        },
+        # 16. Expired pet insurance
+        {
+            "type": "insurance",
+            "name": "Healthy Paws Pet Insurance",
+            "vendor": "Healthy Paws",
+            "amount": 48.00,
+            "currency": "USD",
+            "purchase_date": (today - timedelta(days=45)).isoformat(),
+            "expiry_date": (today - timedelta(days=15)).isoformat(),
+            "renewal_cycle": "monthly",
+            "reminder_date": (today - timedelta(days=45)).isoformat(),
+            "notes": "Past dog health policy, expired 15 days ago",
+        },
+
+        # --- BILLS ---
+        # 17. Electric utility bill due soon
+        {
+            "type": "bill",
+            "name": "City Electric Utility Bill",
+            "vendor": "Con Edison",
+            "amount": 128.40,
+            "currency": "USD",
+            "purchase_date": (today - timedelta(days=4)).isoformat(),
+            "expiry_date": (today + timedelta(days=14)).isoformat(),
+            "renewal_cycle": "monthly",
+            "reminder_date": (today + timedelta(days=4)).isoformat(),
+            "notes": "Residential electric bill due in 14 days",
+        },
+        # 18. Fiber internet bill
+        {
+            "type": "bill",
+            "name": "Verizon Fios Internet Bill",
+            "vendor": "Verizon",
+            "amount": 79.99,
+            "currency": "USD",
+            "purchase_date": (today - timedelta(days=6)).isoformat(),
+            "expiry_date": (today + timedelta(days=18)).isoformat(),
+            "renewal_cycle": "monthly",
+            "reminder_date": (today + timedelta(days=8)).isoformat(),
+            "notes": "1 Gbps fiber optic internet monthly bill",
+        },
+        # 19. Mobile wireless bill
+        {
+            "type": "bill",
+            "name": "T-Mobile Wireless Bill",
+            "vendor": "T-Mobile",
+            "amount": 85.00,
+            "currency": "USD",
+            "purchase_date": (today - timedelta(days=12)).isoformat(),
+            "expiry_date": (today + timedelta(days=12)).isoformat(),
+            "renewal_cycle": "monthly",
+            "reminder_date": (today + timedelta(days=2)).isoformat(),
+            "notes": "Magenta MAX cell phone plan",
+        },
+        # 20. Water bill from last month
+        {
+            "type": "bill",
+            "name": "Municipal Water and Sewer Bill",
+            "vendor": "City Water Board",
+            "amount": 62.50,
+            "currency": "USD",
+            "purchase_date": (today - timedelta(days=38)).isoformat(),
+            "expiry_date": (today - timedelta(days=18)).isoformat(),
+            "renewal_cycle": "monthly",
+            "reminder_date": (today - timedelta(days=28)).isoformat(),
+            "notes": "Water consumption bill from last month",
+        },
+        # 21. Natural gas heating bill
+        {
+            "type": "bill",
+            "name": "National Grid Gas Bill",
+            "vendor": "National Grid",
+            "amount": 54.30,
+            "currency": "USD",
+            "purchase_date": (today - timedelta(days=42)).isoformat(),
+            "expiry_date": (today - timedelta(days=22)).isoformat(),
+            "renewal_cycle": "monthly",
+            "reminder_date": (today - timedelta(days=32)).isoformat(),
+            "notes": "Heating and natural gas bill from last month",
+        },
+        # 22. Trash and recycling past bill
+        {
+            "type": "bill",
+            "name": "Waste Management Recycling Bill",
+            "vendor": "Waste Management",
+            "amount": 95.00,
+            "currency": "USD",
+            "purchase_date": (today - timedelta(days=75)).isoformat(),
+            "expiry_date": (today - timedelta(days=55)).isoformat(),
+            "renewal_cycle": "quarterly",
+            "reminder_date": (today - timedelta(days=65)).isoformat(),
+            "notes": "Quarterly waste disposal bill earlier this year",
+        },
+
+        # --- DOCUMENTS ---
+        # 23. Passport expiring in ~150 days
+        {
+            "type": "document",
+            "name": "US Passport",
+            "vendor": "US Department of State",
+            "amount": 130.00,
+            "currency": "USD",
+            "purchase_date": (today - timedelta(days=3500)).isoformat(),
+            "expiry_date": (today + timedelta(days=150)).isoformat(),
+            "renewal_cycle": None,
+            "reminder_date": (today + timedelta(days=120)).isoformat(),
+            "notes": "10-year regular adult passport expiring in ~150 days",
+        },
+        # 24. Driver's License
+        {
+            "type": "document",
+            "name": "State Driver's License",
+            "vendor": "Department of Motor Vehicles",
+            "amount": 38.00,
+            "currency": "USD",
+            "purchase_date": (today - timedelta(days=700)).isoformat(),
+            "expiry_date": (today + timedelta(days=395)).isoformat(),
+            "renewal_cycle": None,
+            "reminder_date": (today + timedelta(days=365)).isoformat(),
+            "notes": "Class D driver license with REAL ID star",
+        },
+        # 25. Global Entry Card
+        {
+            "type": "document",
+            "name": "Global Entry Trusted Traveler Card",
+            "vendor": "US Customs and Border Protection",
+            "amount": 100.00,
+            "currency": "USD",
+            "purchase_date": (today - timedelta(days=1200)).isoformat(),
+            "expiry_date": (today + timedelta(days=625)).isoformat(),
+            "renewal_cycle": None,
+            "reminder_date": (today + timedelta(days=595)).isoformat(),
+            "notes": "Trusted traveler membership including TSA PreCheck",
+        },
+        # 26. Expired international permit
+        {
+            "type": "document",
+            "name": "International Driving Permit",
+            "vendor": "AAA",
+            "amount": 20.00,
+            "currency": "USD",
+            "purchase_date": (today - timedelta(days=400)).isoformat(),
+            "expiry_date": (today - timedelta(days=35)).isoformat(),
+            "renewal_cycle": None,
+            "reminder_date": (today - timedelta(days=65)).isoformat(),
+            "notes": "1-year international translation booklet, expired 35 days ago",
+        },
     ]
 
-    part_id_map = {}
-    with storage._get_connection() as conn:
-        cursor = conn.cursor()
-        for sku, name, category, qty, reorder_level, unit_cost, supplier in parts_data:
-            cursor.execute(
-                """
-                INSERT INTO parts (sku, name, category, qty, reorder_level, unit_cost, supplier)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-                """,
-                (sku, name, category, qty, reorder_level, unit_cost, supplier),
-            )
-            part_id_map[sku] = cursor.lastrowid
-        conn.commit()
+    for item in records:
+        storage.add_record(item)
 
-    # 2. 10 Jobs (including Job 51 and a mix of open/done)
-    jobs_data = [
-        (45, "2015 Honda Civic", "Alice Walker", "Transmission flush and routine safety inspection", "done"),
-        (46, "2018 Toyota RAV4", "Bob Smith", "Front brake rotor and pad replacement", "done"),
-        (47, "2020 Subaru Outback", "Claire Redfield", "Oil change, air filters, and tire rotation", "done"),
-        (48, "2017 Chevrolet Silverado", "David Miller", "Starter motor replacement and battery load test", "done"),
-        (49, "2016 BMW 328i", "Elena Rostova", "Ignition coil pack and spark plug replacement", "done"),
-        (50, "2014 Jeep Grand Cherokee", "Frank Castle", "Upper radiator hose leak repair and coolant flush", "done"),
-        (51, "2019 Ford F-150", "Mike Johnson", "Brake pad replacement and oil change", "open"),
-        (52, "2021 Toyota Camry", "Grace Hopper", "Cabin and engine air filter replacement", "open"),
-        (53, "2013 Hyundai Elantra", "Harry Potter", "Alternator diagnostic and battery install", "open"),
-        (54, "2018 Mazda CX-5", "Irene Adler", "Serpentine belt check and 60,000-mile service", "open"),
-    ]
-
-    with storage._get_connection() as conn:
-        cursor = conn.cursor()
-        for job_id, vehicle, customer, description, status in jobs_data:
-            cursor.execute(
-                """
-                INSERT INTO jobs (id, vehicle, customer, description, status)
-                VALUES (?, ?, ?, ?, ?)
-                """,
-                (job_id, vehicle, customer, description, status),
-            )
-        conn.commit()
-
-    # 3. 90 Days of Realistic Usage History
-    # Brake pads and oil filters used frequently; specialty parts rarely.
-    now = datetime.now(timezone.utc)
-    done_job_ids = [45, 46, 47, 48, 49, 50]
-
-    # Part usage profiles: (sku, total_events_over_90d, min_qty, max_qty)
-    usage_profiles = [
-        # Very high frequency
-        ("BP-CER-001", 38, 2, 4),    # Brake pads: used frequently
-        ("BP-MET-002", 28, 2, 4),
-        ("FLT-OIL-SPN", 42, 1, 1),   # Oil filters: used very frequently
-        ("FLT-OIL-CRT", 32, 1, 1),
-        ("OIL-5W30-SYN", 45, 4, 6),
-        ("OIL-0W20-SYN", 35, 4, 6),
-        # Medium frequency
-        ("SPK-IRD-001", 20, 4, 6),
-        ("SPK-PLT-002", 14, 4, 4),
-        ("FLT-AIR-ENG", 22, 1, 1),
-        ("FLT-AIR-CAB", 18, 1, 1),
-        ("WPR-BLD-20", 15, 1, 2),
-        ("WPR-BLD-22", 16, 1, 2),
-        ("WPR-BLD-24", 12, 1, 2),
-        ("BLT-10MM-STL", 25, 2, 8),
-        ("BLT-10MM-ZNC", 20, 2, 6),
-        ("FLD-BRK-DOT4", 16, 1, 2),
-        ("FLD-CLN-5050", 18, 1, 2),
-        # Rare parts
-        ("BAT-12V-AGM", 6, 1, 1),
-        ("BAT-12V-STD", 5, 1, 1),
-        ("ALT-130A-REM", 3, 1, 1),
-        ("STR-MTR-REM", 4, 1, 1),
-        ("IGN-COIL-01", 7, 1, 4),
-        ("RTR-FRT-VNT", 8, 2, 2),
-        ("RTR-RR-SLD", 6, 2, 2),
-        ("WHL-BRG-HUB", 3, 1, 2),
-        ("BLT-SERP-6PK", 5, 1, 1),
-        ("RAD-HSE-UPR", 4, 1, 1),
-        ("SNS-O2-UP", 3, 1, 1),
-        ("FLT-FUEL-INL", 4, 1, 1),
-        ("FLD-TRN-ATF", 8, 3, 5),
-    ]
-
-    usage_records = []
-    for sku, num_events, min_qty, max_qty in usage_profiles:
-        part_id = part_id_map[sku]
-        # Spread events across 90 days with deterministic spacing
-        days_ago_pool = sorted(random.sample(range(1, 91), min(num_events, 90)))
-        for days_ago in days_ago_pool:
-            qty = random.randint(min_qty, max_qty)
-            # Assign to a completed job or workshop maintenance
-            job_id = random.choice(done_job_ids) if random.random() < 0.75 else None
-            # Event timestamp
-            event_time = now - timedelta(
-                days=days_ago,
-                hours=random.randint(8, 17),
-                minutes=random.randint(0, 59),
-            )
-            usage_records.append((part_id, job_id, qty, event_time.isoformat()))
-
-    # Sort chronologically
-    usage_records.sort(key=lambda r: r[3])
-
-    with storage._get_connection() as conn:
-        cursor = conn.cursor()
-        cursor.executemany(
-            """
-            INSERT INTO usage_log (part_id, job_id, qty, used_at)
-            VALUES (?, ?, ?, ?)
-            """,
-            usage_records,
-        )
-        conn.commit()
-
-    print(f"Seed complete: {len(parts_data)} parts, {len(jobs_data)} jobs, {len(usage_records)} usage logs created.")
+    print(f"Successfully seeded LifeVault database at: {storage.db_path}")
+    print(f"Total records added: {len(records)}")
 
 
 if __name__ == "__main__":

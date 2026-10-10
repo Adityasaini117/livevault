@@ -1,67 +1,62 @@
-"""Storage layer for StockPilot AI.
+"""Storage layer for LifeVault.
 
 Provides an abstract Storage interface and a concrete SQLite implementation.
+Designed to be backed by SQLite locally and swapped for DynamoDB in the cloud.
 """
 
 from abc import ABC, abstractmethod
-from datetime import datetime, timezone, timedelta
+from datetime import date, datetime, timezone, timedelta
 from pathlib import Path
 import sqlite3
 from typing import Any, Dict, List, Optional
 
+VALID_TYPES = {"warranty", "subscription", "insurance", "bill", "document"}
+
 
 class Storage(ABC):
-    """Abstract base class for StockPilot inventory and job storage."""
+    """Abstract base class for LifeVault records storage."""
 
     @abstractmethod
-    def get_part(self, name_or_sku: str) -> Optional[Dict[str, Any]]:
-        """Fetch a part by exact name or SKU (case-insensitive)."""
+    def add_record(self, record_data: Dict[str, Any]) -> Dict[str, Any]:
+        """Add a new life-admin record and return the created record."""
         pass
 
     @abstractmethod
-    def search_parts(self, query: str) -> List[Dict[str, Any]]:
-        """Partial case-insensitive search across part names and SKUs."""
+    def get_record(self, record_id: int) -> Optional[Dict[str, Any]]:
+        """Retrieve a record by primary ID."""
         pass
 
     @abstractmethod
-    def get_stock(self, part_id: int) -> Optional[int]:
-        """Return the current stock quantity for a part ID."""
+    def search_records(self, query: str) -> List[Dict[str, Any]]:
+        """Case-insensitive partial match across name, vendor, and notes.
+
+        Returns all matching records.
+        """
         pass
 
     @abstractmethod
-    def adjust_stock(self, part_id: int, delta: int) -> Optional[int]:
-        """Adjust stock level by delta (+/-) and return the new quantity."""
+    def update_record(self, record_id: int, updates: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """Update fields of an existing record."""
         pass
 
     @abstractmethod
-    def get_job(self, job_id: int) -> Optional[Dict[str, Any]]:
-        """Fetch job details by job ID."""
+    def delete_record(self, record_id: int) -> bool:
+        """Delete a record by ID. Returns True if deleted, False if not found."""
         pass
 
     @abstractmethod
-    def attach_part_to_job(self, job_id: int, part_id: int, qty: int) -> Dict[str, Any]:
-        """Record a part attached to a job in the usage log."""
+    def list_records(self, type: Optional[str] = None) -> List[Dict[str, Any]]:
+        """List all records, optionally filtered by record type."""
         pass
 
     @abstractmethod
-    def log_usage(
-        self,
-        part_id: int,
-        job_id: Optional[int],
-        qty: int,
-        used_at: Optional[str] = None,
-    ) -> Dict[str, Any]:
-        """Record part usage event."""
+    def list_upcoming(self, days: int) -> List[Dict[str, Any]]:
+        """List upcoming deadlines within the next `days` days."""
         pass
 
     @abstractmethod
-    def get_usage_history(self, part_id: int, days: int = 90) -> List[Dict[str, Any]]:
-        """Return usage history for a part over the last N days."""
-        pass
-
-    @abstractmethod
-    def list_parts(self) -> List[Dict[str, Any]]:
-        """List all parts in inventory."""
+    def spending_by_period(self, start: str, end: str) -> Dict[str, Any]:
+        """Calculate spending total and category breakdown between start and end dates (inclusive)."""
         pass
 
 
@@ -70,13 +65,13 @@ class SqliteStorage(Storage):
 
     def __init__(self, db_path: Optional[str] = None):
         if db_path is None:
-            self.db_path = str(Path(__file__).resolve().parent / "stockpilot.db")
+            self.db_path = str(Path(__file__).resolve().parent / "lifevault.db")
         else:
             self.db_path = db_path
         self.init_db()
 
     def _get_connection(self) -> sqlite3.Connection:
-        """Create a sqlite connection with dictionary row access."""
+        """Create a SQLite connection with dictionary-like row access."""
         conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
         return conn
@@ -86,208 +81,183 @@ class SqliteStorage(Storage):
         with self._get_connection() as conn:
             cursor = conn.cursor()
             if drop_existing:
-                cursor.execute("DROP TABLE IF EXISTS usage_log")
-                cursor.execute("DROP TABLE IF EXISTS jobs")
-                cursor.execute("DROP TABLE IF EXISTS parts")
+                cursor.execute("DROP TABLE IF EXISTS records")
 
             cursor.execute(
                 """
-                CREATE TABLE IF NOT EXISTS parts (
+                CREATE TABLE IF NOT EXISTS records (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    sku TEXT UNIQUE NOT NULL,
+                    type TEXT NOT NULL,
                     name TEXT NOT NULL,
-                    category TEXT NOT NULL,
-                    qty INTEGER NOT NULL,
-                    reorder_level INTEGER NOT NULL,
-                    unit_cost REAL NOT NULL,
-                    supplier TEXT NOT NULL
-                )
-                """
-            )
-            cursor.execute(
-                """
-                CREATE TABLE IF NOT EXISTS jobs (
-                    id INTEGER PRIMARY KEY,
-                    vehicle TEXT NOT NULL,
-                    customer TEXT NOT NULL,
-                    description TEXT NOT NULL,
-                    status TEXT NOT NULL
-                )
-                """
-            )
-            cursor.execute(
-                """
-                CREATE TABLE IF NOT EXISTS usage_log (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    part_id INTEGER NOT NULL,
-                    job_id INTEGER,
-                    qty INTEGER NOT NULL,
-                    used_at TEXT NOT NULL,
-                    FOREIGN KEY(part_id) REFERENCES parts(id),
-                    FOREIGN KEY(job_id) REFERENCES jobs(id)
+                    vendor TEXT,
+                    amount REAL,
+                    currency TEXT DEFAULT 'USD',
+                    purchase_date TEXT,
+                    expiry_date TEXT,
+                    renewal_cycle TEXT,
+                    reminder_date TEXT,
+                    notes TEXT,
+                    created_at TEXT NOT NULL
                 )
                 """
             )
             conn.commit()
 
-    def get_part(self, name_or_sku: str) -> Optional[Dict[str, Any]]:
-        """Fetch a part by exact name or SKU (case-insensitive)."""
-        term = name_or_sku.strip()
-        with self._get_connection() as conn:
-            cursor = conn.cursor()
-            # Match exact SKU first
-            cursor.execute(
-                "SELECT * FROM parts WHERE LOWER(sku) = LOWER(?)",
-                (term,),
-            )
-            row = cursor.fetchone()
-            if row:
-                return dict(row)
-
-            # Match exact name
-            cursor.execute(
-                "SELECT * FROM parts WHERE LOWER(name) = LOWER(?)",
-                (term,),
-            )
-            row = cursor.fetchone()
-            if row:
-                return dict(row)
-
-            return None
-
-    def search_parts(self, query: str) -> List[Dict[str, Any]]:
-        """Partial case-insensitive search returning all matching parts."""
-        clean = query.strip().lower()
-        if not clean:
-            return []
-
-        with self._get_connection() as conn:
-            cursor = conn.cursor()
-            # 1. Direct substring match on whole query or singularized form
-            candidates = [clean]
-            if clean.endswith("s") and len(clean) > 2:
-                candidates.append(clean[:-1])
-
-            matched_ids = set()
-            results = []
-
-            for cand in candidates:
-                pattern = f"%{cand}%"
-                cursor.execute(
-                    """
-                    SELECT * FROM parts
-                    WHERE LOWER(name) LIKE ? OR LOWER(sku) LIKE ?
-                    ORDER BY name ASC
-                    """,
-                    (pattern, pattern),
-                )
-                for row in cursor.fetchall():
-                    row_dict = dict(row)
-                    if row_dict["id"] not in matched_ids:
-                        matched_ids.add(row_dict["id"])
-                        results.append(row_dict)
-
-            if results:
-                return results
-
-            # 2. Token-based matching: each word must match name or sku
-            tokens = [t.rstrip("s") for t in clean.split() if len(t.rstrip("s")) > 0]
-            if not tokens:
-                tokens = clean.split()
-
-            where_clauses = []
-            params = []
-            for t in tokens:
-                where_clauses.append("(LOWER(name) LIKE ? OR LOWER(sku) LIKE ?)")
-                params.extend([f"%{t}%", f"%{t}%"])
-
-            sql = f"""
-                SELECT * FROM parts
-                WHERE {' AND '.join(where_clauses)}
-                ORDER BY name ASC
-            """
-            cursor.execute(sql, params)
-            return [dict(row) for row in cursor.fetchall()]
-
-    def get_stock(self, part_id: int) -> Optional[int]:
-        """Return the current stock quantity for a part ID."""
-        with self._get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute("SELECT qty FROM parts WHERE id = ?", (part_id,))
-            row = cursor.fetchone()
-            return row["qty"] if row else None
-
-    def adjust_stock(self, part_id: int, delta: int) -> Optional[int]:
-        """Adjust stock level by delta and return the updated quantity."""
+    def add_record(self, record_data: Dict[str, Any]) -> Dict[str, Any]:
+        """Insert a record into the database."""
+        created_at = datetime.now(timezone.utc).isoformat()
         with self._get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute(
-                "UPDATE parts SET qty = qty + ? WHERE id = ?",
-                (delta, part_id),
+                """
+                INSERT INTO records (
+                    type, name, vendor, amount, currency,
+                    purchase_date, expiry_date, renewal_cycle,
+                    reminder_date, notes, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    record_data.get("type", "").strip().lower(),
+                    record_data.get("name", "").strip(),
+                    record_data.get("vendor"),
+                    record_data.get("amount"),
+                    record_data.get("currency", "USD"),
+                    record_data.get("purchase_date"),
+                    record_data.get("expiry_date"),
+                    record_data.get("renewal_cycle"),
+                    record_data.get("reminder_date"),
+                    record_data.get("notes"),
+                    created_at,
+                ),
             )
             conn.commit()
-            return self.get_stock(part_id)
+            record_id = cursor.lastrowid
 
-    def get_job(self, job_id: int) -> Optional[Dict[str, Any]]:
-        """Fetch job details by job ID."""
+        return self.get_record(record_id)  # type: ignore
+
+    def get_record(self, record_id: int) -> Optional[Dict[str, Any]]:
+        """Fetch a single record by ID."""
         with self._get_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("SELECT * FROM jobs WHERE id = ?", (job_id,))
+            cursor.execute("SELECT * FROM records WHERE id = ?", (record_id,))
             row = cursor.fetchone()
             return dict(row) if row else None
 
-    def attach_part_to_job(self, job_id: int, part_id: int, qty: int) -> Dict[str, Any]:
-        """Record a part attached to a job in the usage log."""
-        return self.log_usage(part_id=part_id, job_id=job_id, qty=qty)
-
-    def log_usage(
-        self,
-        part_id: int,
-        job_id: Optional[int],
-        qty: int,
-        used_at: Optional[str] = None,
-    ) -> Dict[str, Any]:
-        """Record a part usage event."""
-        if used_at is None:
-            used_at = datetime.now(timezone.utc).isoformat()
-
+    def search_records(self, query: str) -> List[Dict[str, Any]]:
+        """Case-insensitive partial matching across name, vendor, and notes."""
+        clean_query = f"%{query.strip().lower()}%"
         with self._get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute(
                 """
-                INSERT INTO usage_log (part_id, job_id, qty, used_at)
-                VALUES (?, ?, ?, ?)
+                SELECT * FROM records
+                WHERE LOWER(name) LIKE ?
+                   OR LOWER(vendor) LIKE ?
+                   OR LOWER(notes) LIKE ?
+                ORDER BY expiry_date ASC, name ASC
                 """,
-                (part_id, job_id, qty, used_at),
+                (clean_query, clean_query, clean_query),
             )
+            return [dict(row) for row in cursor.fetchall()]
+
+    def update_record(self, record_id: int, updates: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """Update specified fields of a record."""
+        valid_fields = {
+            "type", "name", "vendor", "amount", "currency",
+            "purchase_date", "expiry_date", "renewal_cycle",
+            "reminder_date", "notes"
+        }
+        filtered = {k: v for k, v in updates.items() if k in valid_fields}
+        if not filtered:
+            return self.get_record(record_id)
+
+        set_clause = ", ".join(f"{k} = ?" for k in filtered.keys())
+        params = list(filtered.values()) + [record_id]
+
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(f"UPDATE records SET {set_clause} WHERE id = ?", params)
             conn.commit()
-            log_id = cursor.lastrowid
-            return {
-                "id": log_id,
-                "part_id": part_id,
-                "job_id": job_id,
-                "qty": qty,
-                "used_at": used_at,
-            }
 
-    def get_usage_history(self, part_id: int, days: int = 90) -> List[Dict[str, Any]]:
-        """Return usage history for a part over the last N days."""
-        cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+        return self.get_record(record_id)
+
+    def delete_record(self, record_id: int) -> bool:
+        """Delete a record by ID."""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM records WHERE id = ?", (record_id,))
+            conn.commit()
+            return cursor.rowcount > 0
+
+    def list_records(self, type: Optional[str] = None) -> List[Dict[str, Any]]:
+        """List records, optionally filtering by type."""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            if type:
+                cursor.execute(
+                    "SELECT * FROM records WHERE LOWER(type) = ? ORDER BY expiry_date ASC, name ASC",
+                    (type.strip().lower(),),
+                )
+            else:
+                cursor.execute("SELECT * FROM records ORDER BY expiry_date ASC, name ASC")
+            return [dict(row) for row in cursor.fetchall()]
+
+    def list_upcoming(self, days: int) -> List[Dict[str, Any]]:
+        """Return records expiring or renewing between today and today + days."""
+        today_str = date.today().isoformat()
+        future_str = (date.today() + timedelta(days=days)).isoformat()
         with self._get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute(
                 """
-                SELECT * FROM usage_log
-                WHERE part_id = ? AND used_at >= ?
-                ORDER BY used_at DESC
+                SELECT * FROM records
+                WHERE expiry_date IS NOT NULL
+                  AND expiry_date >= ?
+                  AND expiry_date <= ?
+                ORDER BY expiry_date ASC
                 """,
-                (part_id, cutoff),
+                (today_str, future_str),
             )
             return [dict(row) for row in cursor.fetchall()]
 
-    def list_parts(self) -> List[Dict[str, Any]]:
-        """List all parts in inventory."""
+    def spending_by_period(self, start: str, end: str) -> Dict[str, Any]:
+        """Aggregate total spending and category breakdown for a date range."""
         with self._get_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("SELECT * FROM parts ORDER BY name ASC")
-            return [dict(row) for row in cursor.fetchall()]
+            cursor.execute(
+                """
+                SELECT type, SUM(amount) as cat_total, COUNT(*) as count
+                FROM records
+                WHERE amount IS NOT NULL
+                  AND purchase_date IS NOT NULL
+                  AND purchase_date >= ?
+                  AND purchase_date <= ?
+                GROUP BY type
+                ORDER BY cat_total DESC
+                """,
+                (start, end),
+            )
+            rows = cursor.fetchall()
+
+            categories: Dict[str, float] = {}
+            total = 0.0
+            top_category = None
+            top_amount = 0.0
+
+            for row in rows:
+                c_type = row["type"]
+                c_total = round(float(row["cat_total"] or 0.0), 2)
+                categories[c_type] = c_total
+                total += c_total
+                if top_category is None:
+                    top_category = c_type
+                    top_amount = c_total
+
+            return {
+                "start": start,
+                "end": end,
+                "total": round(total, 2),
+                "categories": categories,
+                "top_category": top_category,
+                "top_amount": top_amount,
+            }

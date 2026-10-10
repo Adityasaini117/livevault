@@ -21,6 +21,7 @@ try:
 except ImportError:
     from mcp.server.fastmcp import FastMCP
 
+from ai import extract_record, AIError
 from storage import SqliteStorage, VALID_TYPES
 
 # Initialize storage and MCP server
@@ -119,7 +120,83 @@ def add_record(
             f"and a reminder is set for {reminder_date_str}."
         )
 
-    return f"Saved {created['name']} as a {clean_type}."
+    article = "an" if clean_type.startswith(("a", "e", "i", "o", "u")) else "a"
+    return f"Saved {created['name']} as {article} {clean_type}."
+
+
+@mcp.tool()
+def add_record_from_text(text: str) -> str:
+    """Extract and save a life-admin record from natural language voice transcript.
+
+    Dispatches to AI provider (Gemini or Bedrock) to extract type, name, vendor,
+    amount, purchase date, warranty months, and renewal cycle.
+    """
+    clean_text = text.strip() if text else ""
+    if not clean_text:
+        return "Please tell me what record you'd like to save."
+
+    try:
+        data = extract_record(clean_text, date.today())
+    except AIError as e:
+        return str(e)
+    except Exception:
+        return "I had trouble understanding the details from that. Could you please rephrase?"
+
+    raw_type = data.get("type")
+    raw_name = data.get("name")
+
+    extracted_type = raw_type.strip().lower() if isinstance(raw_type, str) and raw_type.strip() else None
+    extracted_name = raw_name.strip() if isinstance(raw_name, str) and raw_name.strip() else None
+
+    # Clarifying questions if name or type is missing or not a known type
+    if not extracted_name and not extracted_type:
+        return "What item or record would you like to save, and what type is it?"
+    if not extracted_name:
+        return f"What is the name of the {extracted_type} you would like to save?"
+    if not extracted_type or extracted_type not in VALID_TYPES:
+        return f"What type of record is {extracted_name}? For example: warranty, subscription, insurance, bill, or document."
+
+    # Parse and validate optional fields
+    amount = data.get("amount")
+    if amount is not None:
+        try:
+            amount = float(amount)
+        except (ValueError, TypeError):
+            amount = None
+
+    warranty_months = data.get("warranty_months")
+    if warranty_months is not None:
+        try:
+            warranty_months = int(warranty_months)
+        except (ValueError, TypeError):
+            warranty_months = None
+
+    purchase_date = data.get("purchase_date")
+    if purchase_date and not isinstance(purchase_date, str):
+        purchase_date = None
+
+    renewal_cycle = data.get("renewal_cycle")
+    if renewal_cycle and not isinstance(renewal_cycle, str):
+        renewal_cycle = None
+
+    vendor = data.get("vendor")
+    if vendor and not isinstance(vendor, str):
+        vendor = None
+
+    notes = data.get("notes")
+    if notes and not isinstance(notes, str):
+        notes = None
+
+    return add_record(
+        type=extracted_type,
+        name=extracted_name,
+        amount=amount,
+        purchase_date=purchase_date,
+        warranty_months=warranty_months,
+        renewal_cycle=renewal_cycle,
+        vendor=vendor,
+        notes=notes,
+    )
 
 
 @mcp.tool()

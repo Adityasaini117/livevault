@@ -17,10 +17,19 @@ LifeVault securely stores a person's private life-admin records (warranties, sub
 
 ---
 
+## AI Provider
+
+LifeVault includes a pluggable AI extraction interface in `/server/ai.py` that parses unstructured natural-language requests into structured life-admin records:
+- **Google Gemini**: The default free provider using the official `google-genai` SDK and current Flash models (e.g. `gemini-2.5-flash`), configured via `GEMINI_API_KEY` and `GEMINI_MODEL`.
+- **AWS Bedrock**: The enterprise AWS provider option behind the exact same interface using `boto3` Bedrock-Runtime Converse API, configured via `BEDROCK_MODEL_ID` and `AWS_REGION`.
+
+---
+
 ## Tools
 
 - `ping()`: Health check confirming the LifeVault MCP server is online.
 - `add_record(type, name, amount, purchase_date, warranty_months, renewal_cycle, vendor, notes)`: Saves a record, computes expiry date and 30-day reminder date, and returns a spoken confirmation.
+- `add_record_from_text(text)`: Natural-language extractor that parses free-form voice input, computes deadlines, and saves the record. Asks clarifying questions if the name or type is unclear.
 - `find_record(query)`: Searches records by name, vendor, or notes. Asks clarifying questions if multiple matches exist.
 - `warranty_status(item)`: Reports whether an item is under warranty, expiry date, and days remaining or days since expired.
 - `upcoming_deadlines(days=30)`: Lists upcoming warranties, renewals, bills, and document expiries due in that window (soonest first, max 5 spoken items).

@@ -16,15 +16,25 @@ from pathlib import Path
 import random
 from typing import Optional
 
-from storage import SqliteStorage
+from storage import Storage, get_storage
 
 
-def seed_database(db_path: Optional[str] = None) -> None:
-    """Recreate and populate the LifeVault database with ~25 realistic records."""
+def seed_database(storage_instance: Optional[Storage] = None, db_path: Optional[str] = None) -> None:
+    """Populate the LifeVault database with realistic records using the selected backend."""
     random.seed(42)
 
-    storage = SqliteStorage(db_path=db_path)
-    storage.init_db(drop_existing=True)
+    if storage_instance is not None:
+        storage = storage_instance
+    elif db_path is not None:
+        storage = get_storage(backend="sqlite", db_path=db_path)
+    else:
+        storage = get_storage()
+
+    # Clear existing data for selected backend
+    if hasattr(storage, "clear_all"):
+        storage.clear_all()
+    elif hasattr(storage, "init_db"):
+        storage.init_db(drop_existing=True)
 
     today = date.today()
 
@@ -500,7 +510,12 @@ def seed_database(db_path: Optional[str] = None) -> None:
     for item in records:
         storage.add_record(item)
 
-    print(f"Successfully seeded LifeVault database at: {storage.db_path}")
+    if hasattr(storage, "db_path"):
+        print(f"Successfully seeded LifeVault SQLite database at: {storage.db_path}")
+    elif hasattr(storage, "table_name"):
+        print(f"Successfully seeded LifeVault DynamoDB table '{storage.table_name}' in region '{storage.region_name}'.")
+    else:
+        print(f"Successfully seeded LifeVault database using {storage.__class__.__name__}.")
     print(f"Total records added: {len(records)}")
 
 

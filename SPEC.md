@@ -12,8 +12,8 @@ LifeVault securely stores a person's private life-admin records (warranties, sub
 
 - **Language & Runtime**: Python 3.10+
 - **Protocol**: MCP Python SDK (FastMCP), Streamable HTTP transport (spec 2025-11-25 or later) hosted at `http://localhost:8000/mcp`
-- **Storage Layer**: SQLite (`lifevault.db`) behind an abstract `Storage` interface (designed to be swapped for DynamoDB later)
-- **Planned AWS Services**: Amazon DynamoDB, Amazon Bedrock, Amazon S3, Amazon Textract, Amazon SNS
+- **Storage Layer**: Pluggable storage behind the abstract `Storage` interface supporting SQLite (`lifevault.db`) for local development and Amazon DynamoDB for cloud deployment, selectable via `STORAGE_BACKEND`.
+- **AWS Services**: Amazon DynamoDB, Amazon Bedrock (Converse API), Amazon S3, Amazon Textract, Amazon SNS
 
 ---
 
@@ -49,6 +49,26 @@ LifeVault includes an ASGI middleware layer for the Streamable HTTP transport:
 - **Constant-Time Verification**: Tokens are compared using `hmac.compare_digest` to prevent timing attacks.
 - **Fail-Secure**: Returns HTTP 401 with JSON `{"error": "Unauthorized"}` if missing or incorrect. Never logs tokens or authorization headers.
 - **Development Fallback**: If `LIFEVAULT_API_TOKEN` is unset or blank, requests are permitted with a visible startup console warning.
+
+---
+
+## AWS Usage
+
+LifeVault supports Amazon DynamoDB as an enterprise, cloud-native storage backend selectable via `STORAGE_BACKEND=dynamodb`.
+
+### Table Architecture
+- **Single-Table Design**: A single table (`DYNAMODB_TABLE`, default `lifevault-records`) stores all records and metadata.
+- **Partition Key (`pk`)**: String attribute fixed to `USER#default` for single-user administration.
+- **Sort Key (`sk`)**: String attribute formatted as `REC#` plus a zero-padded 10-digit ID (e.g. `REC#0000000001`).
+- **Atomic ID Generation**: An item with `pk="USER#default"` and `sk="COUNTER"` uses DynamoDB's atomic `ADD last_id :inc` expression to assign monotonically increasing integer IDs.
+- **Data Integrity**: Monetary amounts are stored as DynamoDB `Decimal` types and automatically converted to `float` on read. Attributes with `None` values are omitted on write and restored on read.
+- **Queries**: Records are fetched using a Partition Query (`pk="USER#default"` and `sk begins_with "REC#"`), with in-code filtering for dates, categories, and full-text searches.
+
+### Why DynamoDB Was Chosen
+1. **Serverless & Zero Idle Cost**: With `PAY_PER_REQUEST` (on-demand) billing, there are no hourly server fees or minimum provisioned capacity. Storage and requests scale to zero when idle.
+2. **Predictable Single-Digit Millisecond Latency**: Delivers low-latency reads and writes critical for fast Alexa+ voice interactions.
+3. **Pluggable Architecture**: Implements the identical abstract `Storage` interface as `SqliteStorage`, allowing seamless local testing and deployment with zero changes to tool logic.
+4. **Resilience & Maintenance**: Managed high availability across Availability Zones with automated backups and atomic updates.
 
 ---
 

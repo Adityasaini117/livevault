@@ -6,6 +6,7 @@ Exposed to Alexa+ as an MCP server.
 
 import calendar
 from datetime import date, datetime, timedelta
+import functools
 import hmac
 import json
 import os
@@ -26,12 +27,23 @@ except ImportError:
     from mcp.server.fastmcp import FastMCP
 
 from ai import extract_record, AIError
-from storage import SqliteStorage, VALID_TYPES
+from storage import get_storage, StorageError, VALID_TYPES
 
 # Check API token on startup and print warning if not configured
 _api_token = os.getenv("LIFEVAULT_API_TOKEN")
 if not _api_token or not _api_token.strip():
     print("WARNING: LIFEVAULT_API_TOKEN is not set. Access protection is disabled.")
+
+
+def _handle_storage_errors(func):
+    """Decorator to catch StorageError and return a friendly spoken message."""
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        try:
+            return func(*args, **kwargs)
+        except StorageError as e:
+            return str(e)
+    return wrapper
 
 
 class ApiTokenAuthMiddleware:
@@ -89,7 +101,7 @@ class ApiTokenAuthMiddleware:
 
 
 # Initialize storage and MCP server
-storage = SqliteStorage()
+storage = get_storage()
 mcp = FastMCP("LifeVault")
 
 # Wrap streamable_http_app to enforce ASGI auth protection
@@ -129,6 +141,7 @@ def ping() -> str:
 
 
 @mcp.tool()
+@_handle_storage_errors
 def add_record(
     type: str,
     name: str,
@@ -276,6 +289,7 @@ def add_record_from_text(text: str) -> str:
 
 
 @mcp.tool()
+@_handle_storage_errors
 def find_record(query: str) -> str:
     """Find records matching a search query by name, vendor, or notes."""
     clean_query = query.strip()
@@ -302,6 +316,7 @@ def find_record(query: str) -> str:
 
 
 @mcp.tool()
+@_handle_storage_errors
 def warranty_status(item: str) -> str:
     """Check if an item is under warranty, expiry date, and days remaining or past."""
     clean_item = item.strip()
@@ -338,6 +353,7 @@ def warranty_status(item: str) -> str:
 
 
 @mcp.tool()
+@_handle_storage_errors
 def upcoming_deadlines(days: int = 30) -> str:
     """List warranties, renewals, bills, and document expiries due in the next N days."""
     if days <= 0:
@@ -359,6 +375,7 @@ def upcoming_deadlines(days: int = 30) -> str:
 
 
 @mcp.tool()
+@_handle_storage_errors
 def spending_summary(period: str) -> str:
     """Summarize spending total and top category for 'this month', 'last month', or 'this year'."""
     clean_period = period.strip().lower()
@@ -397,6 +414,7 @@ def spending_summary(period: str) -> str:
 
 
 @mcp.tool()
+@_handle_storage_errors
 def delete_record(name: str, confirm: bool = False) -> str:
     """Delete a record by name. Requires confirm=True to permanently delete."""
     clean_name = name.strip()
@@ -430,7 +448,11 @@ def _detect_bill_anomalies(name: Optional[str] = None) -> Tuple[List[Dict[str, A
     Requires at least 3 earlier bills plus the latest (at least 4 bills total).
     Returns (anomalies_list, message_override).
     """
-    bills = storage.list_bills(name)
+    try:
+        bills = storage.list_bills(name)
+    except StorageError as e:
+        return [], str(e)
+
     if not bills:
         if name:
             return [], f"I couldn't find any bill records matching '{name.strip()}'."
@@ -506,6 +528,7 @@ def _detect_bill_anomalies(name: Optional[str] = None) -> Tuple[List[Dict[str, A
 
 
 @mcp.tool()
+@_handle_storage_errors
 def renew_record(
     name: str,
     extend_months: Optional[int] = None,
@@ -604,6 +627,7 @@ def renew_record(
 
 
 @mcp.tool()
+@_handle_storage_errors
 def morning_brief() -> str:
     """Provide a short spoken morning summary of upcoming deadlines, recent expirations, and bill anomalies."""
     upcoming = storage.list_upcoming(7)
@@ -635,6 +659,7 @@ def morning_brief() -> str:
 
 
 @mcp.tool()
+@_handle_storage_errors
 def draft_warranty_claim(item: str) -> str:
     """Draft a ready-to-send warranty claim email using stored record details."""
     clean_item = item.strip() if item else ""
@@ -693,6 +718,7 @@ def draft_warranty_claim(item: str) -> str:
 
 
 @mcp.tool()
+@_handle_storage_errors
 def bill_anomalies(name: Optional[str] = None) -> str:
     """Check for bill anomalies where the latest amount exceeds the earlier median by > 25%."""
     clean_name = name.strip() if name and name.strip() else None

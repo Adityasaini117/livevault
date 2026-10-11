@@ -7,11 +7,17 @@ Designed to be backed by SQLite locally and swapped for DynamoDB in the cloud.
 from abc import ABC, abstractmethod
 from contextlib import contextmanager
 from datetime import date, datetime, timezone, timedelta
+import os
 from pathlib import Path
 import sqlite3
 from typing import Any, Dict, List, Optional
 
 VALID_TYPES = {"warranty", "subscription", "insurance", "bill", "document"}
+
+
+class StorageError(Exception):
+    """Exception carrying a speech-friendly error message for storage operations."""
+    pass
 
 
 class Storage(ABC):
@@ -320,3 +326,22 @@ class SqliteStorage(Storage):
                 "top_category": top_category,
                 "top_amount": top_amount,
             }
+
+    def clear_all(self) -> None:
+        """Clear all records from database. Used for reseeding."""
+        self.init_db(drop_existing=True)
+
+
+def get_storage(backend: Optional[str] = None, **kwargs: Any) -> Storage:
+    """Return configured storage backend ('sqlite' or 'dynamodb').
+
+    Defaults to STORAGE_BACKEND environment variable or 'sqlite'.
+    """
+    selected = (backend or os.getenv("STORAGE_BACKEND", "sqlite")).strip().lower()
+    if selected == "dynamodb":
+        from storage_dynamodb import DynamoDbStorage
+        return DynamoDbStorage(**kwargs)
+    elif selected == "sqlite":
+        return SqliteStorage(**kwargs)
+    else:
+        raise ValueError(f"Unknown storage backend: '{selected}'. Choose 'sqlite' or 'dynamodb'.")

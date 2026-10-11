@@ -1,0 +1,2 @@
+# Development dependencies for LifeVault
+moto[dynamodb]>=5.0.0

@@ -35,6 +35,20 @@ LifeVault includes a pluggable AI extraction interface in `/server/ai.py` that p
 - `upcoming_deadlines(days=30)`: Lists upcoming warranties, renewals, bills, and document expiries due in that window (soonest first, max 5 spoken items).
 - `spending_summary(period)`: Summarizes total spend and top spending category for "this month", "last month", or "this year".
 - `delete_record(name, confirm=False)`: Asks for explicit confirmation before permanently deleting any record.
+- `renew_record(name, extend_months=None, new_expiry_date=None, amount=None)`: Renews an existing record, recalculates the expiry and 30-day reminder date, optionally updates the amount, and returns a spoken confirmation.
+- `morning_brief()`: Delivers a short spoken daily summary covering deadlines due in the next 7 days, items expired in the last 14 days, and detected bill anomalies.
+- `draft_warranty_claim(item)`: Generates a ready-to-send warranty claim email draft using strictly stored details, with placeholders for unknown fields and expiration notices.
+- `bill_anomalies(name=None)`: Detects recurring bill spikes by comparing the latest bill against the median of at least 3 earlier bills (> 25% threshold).
+
+---
+
+## Access Protection
+
+LifeVault includes an ASGI middleware layer for the Streamable HTTP transport:
+- **Authentication**: When `LIFEVAULT_API_TOKEN` is set, all incoming HTTP requests must include `Authorization: Bearer <token>`.
+- **Constant-Time Verification**: Tokens are compared using `hmac.compare_digest` to prevent timing attacks.
+- **Fail-Secure**: Returns HTTP 401 with JSON `{"error": "Unauthorized"}` if missing or incorrect. Never logs tokens or authorization headers.
+- **Development Fallback**: If `LIFEVAULT_API_TOKEN` is unset or blank, requests are permitted with a visible startup console warning.
 
 ---
 

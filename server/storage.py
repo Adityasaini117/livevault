@@ -5,6 +5,7 @@ Designed to be backed by SQLite locally and swapped for DynamoDB in the cloud.
 """
 
 from abc import ABC, abstractmethod
+from contextlib import contextmanager
 from datetime import date, datetime, timezone, timedelta
 from pathlib import Path
 import sqlite3
@@ -55,6 +56,16 @@ class Storage(ABC):
         pass
 
     @abstractmethod
+    def list_expired(self, days: int) -> List[Dict[str, Any]]:
+        """List records that expired in the last `days` days."""
+        pass
+
+    @abstractmethod
+    def list_bills(self, name: Optional[str] = None) -> List[Dict[str, Any]]:
+        """List bill records, optionally filtered by name or vendor."""
+        pass
+
+    @abstractmethod
     def spending_by_period(self, start: str, end: str) -> Dict[str, Any]:
         """Calculate spending total and category breakdown between start and end dates (inclusive)."""
         pass
@@ -70,11 +81,16 @@ class SqliteStorage(Storage):
             self.db_path = db_path
         self.init_db()
 
-    def _get_connection(self) -> sqlite3.Connection:
-        """Create a SQLite connection with dictionary-like row access."""
+    @contextmanager
+    def _get_connection(self):
+        """Yield a SQLite connection with dictionary-like row access, ensuring closure."""
         conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
-        return conn
+        try:
+            with conn:
+                yield conn
+        finally:
+            conn.close()
 
     def init_db(self, drop_existing: bool = False) -> None:
         """Initialize database schema."""
@@ -218,6 +234,49 @@ class SqliteStorage(Storage):
                 """,
                 (today_str, future_str),
             )
+            return [dict(row) for row in cursor.fetchall()]
+
+    def list_expired(self, days: int) -> List[Dict[str, Any]]:
+        """Return records that expired between today - days and today."""
+        today_str = date.today().isoformat()
+        past_str = (date.today() - timedelta(days=days)).isoformat()
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT * FROM records
+                WHERE expiry_date IS NOT NULL
+                  AND expiry_date >= ?
+                  AND expiry_date < ?
+                ORDER BY expiry_date DESC
+                """,
+                (past_str, today_str),
+            )
+            return [dict(row) for row in cursor.fetchall()]
+
+    def list_bills(self, name: Optional[str] = None) -> List[Dict[str, Any]]:
+        """Return bill records, ordered by purchase date ascending."""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            if name:
+                clean = f"%{name.strip().lower()}%"
+                cursor.execute(
+                    """
+                    SELECT * FROM records
+                    WHERE LOWER(type) = 'bill'
+                      AND (LOWER(name) LIKE ? OR LOWER(vendor) LIKE ?)
+                    ORDER BY purchase_date ASC, id ASC
+                    """,
+                    (clean, clean),
+                )
+            else:
+                cursor.execute(
+                    """
+                    SELECT * FROM records
+                    WHERE LOWER(type) = 'bill'
+                    ORDER BY purchase_date ASC, id ASC
+                    """
+                )
             return [dict(row) for row in cursor.fetchall()]
 
     def spending_by_period(self, start: str, end: str) -> Dict[str, Any]:

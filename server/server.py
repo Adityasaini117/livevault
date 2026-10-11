@@ -6,9 +6,13 @@ Exposed to Alexa+ as an MCP server.
 
 import calendar
 from datetime import date, datetime, timedelta
+import hmac
+import json
+import os
 from pathlib import Path
+import statistics
 import sys
-from typing import Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 # Ensure local imports work regardless of execution working directory
 server_dir = Path(__file__).resolve().parent
@@ -24,9 +28,81 @@ except ImportError:
 from ai import extract_record, AIError
 from storage import SqliteStorage, VALID_TYPES
 
+# Check API token on startup and print warning if not configured
+_api_token = os.getenv("LIFEVAULT_API_TOKEN")
+if not _api_token or not _api_token.strip():
+    print("WARNING: LIFEVAULT_API_TOKEN is not set. Access protection is disabled.")
+
+
+class ApiTokenAuthMiddleware:
+    """ASGI middleware to enforce Bearer token authentication."""
+
+    def __init__(self, app, expected_token: Optional[str] = None):
+        self.app = app
+        self.expected_token = expected_token.strip() if expected_token and expected_token.strip() else None
+
+    async def __call__(self, scope, receive, send):
+        # Allow non-HTTP scopes (lifespan, etc.) to pass directly through
+        if scope.get("type") != "http":
+            await self.app(scope, receive, send)
+            return
+
+        # If token is not set, access protection is disabled (local testing)
+        if not self.expected_token:
+            await self.app(scope, receive, send)
+            return
+
+        # Extract Authorization header without logging
+        auth_header = None
+        for key, value in scope.get("headers", []):
+            if key.lower() == b"authorization":
+                try:
+                    auth_header = value.decode("utf-8")
+                except UnicodeDecodeError:
+                    pass
+                break
+
+        authorized = False
+        if auth_header and auth_header.startswith("Bearer "):
+            token = auth_header[7:].strip()
+            if hmac.compare_digest(token, self.expected_token):
+                authorized = True
+
+        if not authorized:
+            body = b'{"error": "Unauthorized"}'
+            await send({
+                "type": "http.response.start",
+                "status": 401,
+                "headers": [
+                    (b"content-type", b"application/json"),
+                    (b"content-length", str(len(body)).encode("ascii")),
+                ],
+            })
+            await send({
+                "type": "http.response.body",
+                "body": body,
+                "more_body": False,
+            })
+            return
+
+        await self.app(scope, receive, send)
+
+
 # Initialize storage and MCP server
 storage = SqliteStorage()
 mcp = FastMCP("LifeVault")
+
+# Wrap streamable_http_app to enforce ASGI auth protection
+_orig_streamable_http_app = mcp.streamable_http_app
+
+
+def _protected_streamable_http_app(*args, **kwargs):
+    starlette_app = _orig_streamable_http_app(*args, **kwargs)
+    token = os.getenv("LIFEVAULT_API_TOKEN")
+    return ApiTokenAuthMiddleware(starlette_app, expected_token=token)
+
+
+mcp.streamable_http_app = _protected_streamable_http_app
 
 
 def _add_months(source_date: date, months: int) -> date:
@@ -346,6 +422,288 @@ def delete_record(name: str, confirm: bool = False) -> str:
 
     storage.delete_record(target["id"])
     return f"The record for {target['name']} has been deleted."
+
+
+def _detect_bill_anomalies(name: Optional[str] = None) -> Tuple[List[Dict[str, Any]], Optional[str]]:
+    """Detect bill anomalies where the latest bill is > 25% above earlier median.
+
+    Requires at least 3 earlier bills plus the latest (at least 4 bills total).
+    Returns (anomalies_list, message_override).
+    """
+    bills = storage.list_bills(name)
+    if not bills:
+        if name:
+            return [], f"I couldn't find any bill records matching '{name.strip()}'."
+        return [], "No bill records found."
+
+    groups: Dict[str, List[Dict[str, Any]]] = {}
+    for bill in bills:
+        if bill.get("amount") is None:
+            continue
+        key = bill["name"].strip().lower()
+        groups.setdefault(key, []).append(bill)
+
+    if not groups:
+        if name:
+            return [], f"There is not enough billing history to detect anomalies for {name.strip()}."
+        return [], "No unusual bill amounts detected."
+
+    if name and len(groups) == 1:
+        series = list(groups.values())[0]
+        series.sort(key=lambda b: (b.get("purchase_date") or "", b.get("id") or 0))
+        if len(series) < 4:
+            return [], f"There is not enough billing history to detect anomalies for {name.strip()}."
+
+        earlier = series[:-1]
+        latest = series[-1]
+        earlier_amounts = [b["amount"] for b in earlier]
+        med = statistics.median(earlier_amounts)
+
+        if med > 0 and latest["amount"] > 1.25 * med:
+            pct = round(((latest["amount"] - med) / med) * 100)
+            latest_val = int(latest["amount"]) if float(latest["amount"]).is_integer() else f"{latest['amount']:.2f}"
+            med_val = int(round(med))
+            bill_name = latest["name"].strip()
+            if not bill_name.lower().endswith("bill"):
+                bill_name = f"{bill_name} bill"
+            msg = f"Your {bill_name.lower()} is {pct} percent higher than usual: {latest_val} dollars against about {med_val}."
+            return [{
+                "name": latest["name"],
+                "pct": pct,
+                "latest": latest["amount"],
+                "median": med,
+                "message": msg,
+            }], None
+        return [], f"No unusual bill amounts detected for {name.strip()}."
+
+    anomalies: List[Dict[str, Any]] = []
+    for key, series in groups.items():
+        series.sort(key=lambda b: (b.get("purchase_date") or "", b.get("id") or 0))
+        if len(series) < 4:
+            continue
+        earlier = series[:-1]
+        latest = series[-1]
+        earlier_amounts = [b["amount"] for b in earlier]
+        med = statistics.median(earlier_amounts)
+
+        if med > 0 and latest["amount"] > 1.25 * med:
+            pct = round(((latest["amount"] - med) / med) * 100)
+            latest_val = int(latest["amount"]) if float(latest["amount"]).is_integer() else f"{latest['amount']:.2f}"
+            med_val = int(round(med))
+            bill_name = latest["name"].strip()
+            if not bill_name.lower().endswith("bill"):
+                bill_name = f"{bill_name} bill"
+            msg = f"Your {bill_name.lower()} is {pct} percent higher than usual: {latest_val} dollars against about {med_val}."
+            anomalies.append({
+                "name": latest["name"],
+                "pct": pct,
+                "latest": latest["amount"],
+                "median": med,
+                "message": msg,
+            })
+
+    return anomalies, None
+
+
+@mcp.tool()
+def renew_record(
+    name: str,
+    extend_months: Optional[int] = None,
+    new_expiry_date: Optional[str] = None,
+    amount: Optional[float] = None,
+) -> str:
+    """Renew a life-admin record, updating expiry and reminder dates."""
+    clean_name = name.strip() if name else ""
+    if not clean_name:
+        return "Please specify the name of the record to renew."
+
+    matches = storage.search_records(clean_name)
+    if not matches:
+        return f"I couldn't find any records matching '{clean_name}'."
+
+    if len(matches) > 1:
+        names = [m["name"] for m in matches]
+        return _format_clarification(names)
+
+    record = matches[0]
+    today = date.today()
+
+    # Determine new expiry date
+    if new_expiry_date is not None and str(new_expiry_date).strip():
+        try:
+            target_expiry = date.fromisoformat(str(new_expiry_date).strip())
+        except ValueError:
+            return "Please provide new_expiry_date in YYYY-MM-DD format."
+        if target_expiry <= today:
+            return "The new expiry date must be after today."
+    elif extend_months is not None:
+        try:
+            months = int(extend_months)
+            if months <= 0:
+                return "Please specify a positive number of months to extend."
+        except (ValueError, TypeError):
+            return "Please specify a valid number of months."
+
+        curr_expiry_str = record.get("expiry_date")
+        if curr_expiry_str:
+            try:
+                curr_expiry = date.fromisoformat(curr_expiry_str)
+                base_date = curr_expiry if curr_expiry >= today else today
+            except ValueError:
+                base_date = today
+        else:
+            base_date = today
+        target_expiry = _add_months(base_date, months)
+    elif record.get("renewal_cycle"):
+        cycle = record["renewal_cycle"].strip().lower()
+        cycle_map = {
+            "monthly": 1,
+            "quarterly": 3,
+            "yearly": 12,
+            "annual": 12,
+            "6-month": 6,
+            "semi-annual": 6,
+        }
+        if cycle in cycle_map:
+            months = cycle_map[cycle]
+            curr_expiry_str = record.get("expiry_date")
+            if curr_expiry_str:
+                try:
+                    curr_expiry = date.fromisoformat(curr_expiry_str)
+                    base_date = curr_expiry if curr_expiry >= today else today
+                except ValueError:
+                    base_date = today
+            else:
+                base_date = today
+            target_expiry = _add_months(base_date, months)
+        else:
+            return f"How long would you like to renew {record['name']} for?"
+    else:
+        return f"How long would you like to renew {record['name']} for?"
+
+    target_reminder = target_expiry - timedelta(days=30)
+    new_expiry_str = target_expiry.isoformat()
+    new_reminder_str = target_reminder.isoformat()
+
+    updates: Dict[str, Any] = {
+        "expiry_date": new_expiry_str,
+        "reminder_date": new_reminder_str,
+    }
+
+    if amount is not None:
+        try:
+            amt = float(amount)
+            if amt < 0:
+                return "Amount cannot be negative."
+            updates["amount"] = round(amt, 2)
+        except (ValueError, TypeError):
+            return "Please provide a valid amount."
+
+    storage.update_record(record["id"], updates)
+    return f"Renewed {record['name']}: new expiry is {new_expiry_str} and reminder is set for {new_reminder_str}."
+
+
+@mcp.tool()
+def morning_brief() -> str:
+    """Provide a short spoken morning summary of upcoming deadlines, recent expirations, and bill anomalies."""
+    upcoming = storage.list_upcoming(7)
+    expired = storage.list_expired(14)
+    anomalies, _ = _detect_bill_anomalies()
+
+    items: List[str] = []
+
+    for item in upcoming:
+        items.append(f"{item['name']} due on {item['expiry_date']}")
+
+    for item in expired:
+        items.append(f"{item['name']} expired on {item['expiry_date']}")
+
+    for a in anomalies:
+        val_str = int(a['latest']) if float(a['latest']).is_integer() else f"{a['latest']:.2f}"
+        items.append(f"{a['name']} bill anomaly of {val_str} dollars")
+
+    total = len(items)
+    if total == 0:
+        return "Good morning! You have no upcoming deadlines, recent expirations, or bill anomalies."
+
+    if total <= 5:
+        return f"Here is your morning brief: {', '.join(items)}."
+
+    shown = items[:5]
+    remaining = total - 5
+    return f"Here is your morning brief: {', '.join(shown)}, and {remaining} more."
+
+
+@mcp.tool()
+def draft_warranty_claim(item: str) -> str:
+    """Draft a ready-to-send warranty claim email using stored record details."""
+    clean_item = item.strip() if item else ""
+    if not clean_item:
+        return "Please specify an item to draft a warranty claim for."
+
+    matches = storage.search_records(clean_item)
+    warranty_matches = [m for m in matches if m.get("type") == "warranty"]
+
+    if not warranty_matches:
+        if matches:
+            return f"I found {matches[0]['name']}, but it is not recorded as a warranty."
+        return f"I couldn't find any warranty records for '{clean_item}'."
+
+    if len(warranty_matches) > 1:
+        names = [m["name"] for m in warranty_matches]
+        return _format_clarification(names)
+
+    record = warranty_matches[0]
+    today = date.today()
+
+    expired_prefix = ""
+    expiry_str = record.get("expiry_date")
+    if expiry_str:
+        try:
+            exp_date = date.fromisoformat(expiry_str)
+            if exp_date < today:
+                expired_prefix = f"Notice: The warranty for {record['name']} expired on {expiry_str}.\n\n"
+        except ValueError:
+            pass
+
+    item_name = record.get("name") or "[item name]"
+    vendor = record.get("vendor") or "[vendor/manufacturer]"
+    purchase_date = record.get("purchase_date") or "[purchase date]"
+    if record.get("amount") is not None:
+        amount_val = record["amount"]
+        price = f"${int(amount_val)}" if isinstance(amount_val, (int, float)) and float(amount_val).is_integer() else f"${amount_val:.2f}"
+    else:
+        price = "[purchase price]"
+    warranty_expiry = expiry_str or "[warranty expiration date]"
+
+    return (
+        f"{expired_prefix}"
+        f"Subject: Warranty Claim - {item_name}\n\n"
+        f"Dear {vendor} Support Team,\n\n"
+        f"I am writing to file a warranty claim for my {item_name}, purchased on {purchase_date} "
+        f"for {price}. The recorded warranty expiration date is {warranty_expiry}.\n\n"
+        f"Issue Description:\n"
+        f"[describe the problem]\n\n"
+        f"Please let me know the required next steps to process this claim, repair, or replacement.\n\n"
+        f"Thank you,\n"
+        f"[your name]\n"
+        f"[your contact information]\n\n"
+        f"Note: This is a draft and not legal advice."
+    )
+
+
+@mcp.tool()
+def bill_anomalies(name: Optional[str] = None) -> str:
+    """Check for bill anomalies where the latest amount exceeds the earlier median by > 25%."""
+    clean_name = name.strip() if name and name.strip() else None
+    anomalies, override = _detect_bill_anomalies(clean_name)
+    if override:
+        return override
+    if not anomalies:
+        if clean_name:
+            return f"No unusual bill amounts detected for {clean_name}."
+        return "No unusual bill amounts detected."
+    return " ".join(a["message"] for a in anomalies)
 
 
 if __name__ == "__main__":

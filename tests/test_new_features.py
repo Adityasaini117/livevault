@@ -378,7 +378,7 @@ class TestNewFeatures(unittest.TestCase):
         self.assertEqual(events[0]["status"], 200)
 
     def test_auth_middleware_rejects_missing_or_wrong_token(self):
-        """Returns 401 Unauthorized with JSON body when token is missing or wrong."""
+        """Returns 401 Unauthorized with WWW-Authenticate header when token is missing or wrong on /mcp."""
         import asyncio
 
         async def dummy_app(scope, receive, send):
@@ -386,24 +386,28 @@ class TestNewFeatures(unittest.TestCase):
 
         middleware = ApiTokenAuthMiddleware(dummy_app, expected_token="secure-test-token")
 
-        # Missing token
+        # Missing token on /mcp gives 401
         events_missing = []
         async def send_missing(event):
             events_missing.append(event)
-        asyncio.run(middleware({"type": "http", "headers": []}, None, send_missing))
+        asyncio.run(middleware({"type": "http", "path": "/mcp", "headers": []}, None, send_missing))
         self.assertEqual(events_missing[0]["status"], 401)
+        headers_dict = dict(events_missing[0]["headers"])
+        self.assertEqual(headers_dict.get(b"www-authenticate"), b"Bearer")
         self.assertEqual(events_missing[1]["body"], b'{"error": "Unauthorized"}')
 
-        # Wrong token
+        # Wrong token on /mcp gives 401
         events_wrong = []
         async def send_wrong(event):
             events_wrong.append(event)
         headers_wrong = [(b"authorization", b"Bearer wrong-token")]
-        asyncio.run(middleware({"type": "http", "headers": headers_wrong}, None, send_wrong))
+        asyncio.run(middleware({"type": "http", "path": "/mcp", "headers": headers_wrong}, None, send_wrong))
         self.assertEqual(events_wrong[0]["status"], 401)
+        headers_wrong_dict = dict(events_wrong[0]["headers"])
+        self.assertEqual(headers_wrong_dict.get(b"www-authenticate"), b"Bearer")
 
     def test_auth_middleware_accepts_valid_token(self):
-        """Passes request through when valid Bearer token is provided."""
+        """Passes request through when valid Bearer token is provided on /mcp."""
         import asyncio
 
         async def dummy_app(scope, receive, send):
@@ -416,9 +420,34 @@ class TestNewFeatures(unittest.TestCase):
         async def send_ok(event):
             events.append(event)
         headers_ok = [(b"authorization", b"Bearer secure-test-token")]
-        asyncio.run(middleware({"type": "http", "headers": headers_ok}, None, send_ok))
+        asyncio.run(middleware({"type": "http", "path": "/mcp", "headers": headers_ok}, None, send_ok))
         self.assertEqual(events[0]["status"], 200)
         self.assertEqual(events[1]["body"], b"Authorized")
+
+    def test_auth_middleware_oauth_discovery_paths_return_404(self):
+        """Returns 404 for OAuth discovery and endpoint paths so clients do not assume OAuth."""
+        import asyncio
+
+        async def dummy_app(scope, receive, send):
+            await send({"type": "http.response.start", "status": 200, "headers": []})
+
+        middleware = ApiTokenAuthMiddleware(dummy_app, expected_token="secure-test-token")
+
+        oauth_paths = [
+            "/.well-known/oauth-authorization-server",
+            "/.well-known/openid-configuration",
+            "/register",
+            "/authorize",
+            "/token",
+        ]
+
+        for path in oauth_paths:
+            events = []
+            async def send_res(event):
+                events.append(event)
+            asyncio.run(middleware({"type": "http", "path": path, "headers": []}, None, send_res))
+            self.assertEqual(events[0]["status"], 404, f"Path {path} did not return 404")
+            self.assertEqual(events[1]["body"], b'{"error": "Not Found"}')
 
 
 if __name__ == "__main__":

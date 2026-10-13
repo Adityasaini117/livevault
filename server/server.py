@@ -64,6 +64,31 @@ class ApiTokenAuthMiddleware:
             await self.app(scope, receive, send)
             return
 
+        path = scope.get("path", "")
+
+        # Return 404 for OAuth discovery and endpoint paths so clients do not assume OAuth is supported
+        if path.startswith("/.well-known/") or path in ("/register", "/authorize", "/token"):
+            body = b'{"error": "Not Found"}'
+            await send({
+                "type": "http.response.start",
+                "status": 404,
+                "headers": [
+                    (b"content-type", b"application/json"),
+                    (b"content-length", str(len(body)).encode("ascii")),
+                ],
+            })
+            await send({
+                "type": "http.response.body",
+                "body": body,
+                "more_body": False,
+            })
+            return
+
+        # Only enforce bearer token on the MCP endpoint (/mcp)
+        if not (path == "/mcp" or path.startswith("/mcp/")):
+            await self.app(scope, receive, send)
+            return
+
         # Extract Authorization header without logging
         auth_header = None
         for key, value in scope.get("headers", []):
@@ -88,6 +113,7 @@ class ApiTokenAuthMiddleware:
                 "headers": [
                     (b"content-type", b"application/json"),
                     (b"content-length", str(len(body)).encode("ascii")),
+                    (b"www-authenticate", b"Bearer"),
                 ],
             })
             await send({

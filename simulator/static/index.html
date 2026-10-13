@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Alexa+ LifeVault Simulator</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+</head>
+<body>
+  <div class="app-container">
+    <!-- Top Bar -->
+    <header class="app-header">
+      <div class="brand">
+        <div class="alexa-ring small-ring">
+          <div class="ring-core"></div>
+        </div>
+        <div>
+          <h1>Alexa+ Simulator</h1>
+          <span class="subtitle">LifeVault Voice Assistant</span>
+        </div>
+      </div>
+      <button id="toggleSettingsBtn" class="btn-icon" title="Server Settings" aria-label="Settings">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <circle cx="12" cy="12" r="3"></circle>
+          <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+        </svg>
+      </button>
+    </header>
+
+    <!-- Settings Drawer / Panel -->
+    <section id="settingsPanel" class="settings-panel">
+      <div class="settings-content">
+        <h3>Connection Settings</h3>
+        <p class="settings-hint">Configure your LifeVault MCP Streamable HTTP endpoint. Sent per-request only.</p>
+        <div class="form-group">
+          <label for="serverUrlInput">MCP Server URL</label>
+          <input type="text" id="serverUrlInput" value="http://localhost:8000/mcp" placeholder="http://localhost:8000/mcp" spellcheck="false">
+        </div>
+        <div class="form-group">
+          <label for="bearerTokenInput">Bearer Token (optional)</label>
+          <input type="password" id="bearerTokenInput" placeholder="Enter LIFEVAULT_API_TOKEN if protected" spellcheck="false" autocomplete="off">
+        </div>
+        <div class="settings-actions">
+          <button id="saveSettingsBtn" class="btn btn-secondary">Apply Settings</button>
+          <span id="settingsSavedHint" class="saved-hint">Saved</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- Support Warning Banner (if Speech APIs unsupported) -->
+    <div id="speechWarningBanner" class="speech-warning hidden"></div>
+
+    <!-- Main Voice Assistant Stage -->
+    <main class="assistant-stage">
+      <!-- Animated Alexa Orb -->
+      <div class="orb-container">
+        <div id="voiceOrb" class="alexa-ring large-ring idle">
+          <div class="ring-core"></div>
+        </div>
+        <div id="statusLabel" class="status-label">Tap microphone to speak or type below</div>
+      </div>
+
+      <!-- Quick Demo Prompt Chips -->
+      <div class="chips-container">
+        <span class="chips-label">Try asking:</span>
+        <div class="chips-row">
+          <button class="chip-btn" data-prompt="what's due this week?">"what's due this week?"</button>
+          <button class="chip-btn" data-prompt="is my laptop still under warranty?">"is my laptop still under warranty?"</button>
+          <button class="chip-btn" data-prompt="I bought AirPods for 249 dollars last Tuesday, one year warranty">"I bought AirPods for 249 dollars last Tuesday, one year warranty"</button>
+        </div>
+      </div>
+
+      <!-- Conversation Stream -->
+      <section id="chatStream" class="chat-stream" aria-live="polite">
+        <div class="message-card assistant welcome-card">
+          <div class="msg-header">
+            <span class="sender-tag">Alexa+</span>
+          </div>
+          <div class="msg-body">
+            Hello! I can check your warranties, upcoming bill deadlines, or record new purchases into LifeVault. What can I help you with today?
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <!-- Input Bar (Speech Mic + Text Fallback) -->
+    <footer class="input-container">
+      <form id="chatForm" class="chat-form" autocomplete="off">
+        <button type="button" id="micBtn" class="btn-mic" title="Voice Input" aria-label="Microphone Voice Input">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"></path>
+            <path d="M19 10v2a7 7 0 0 1-14 0v-2"></path>
+            <line x1="12" y1="19" x2="12" y2="23"></line>
+            <line x1="8" y1="23" x2="16" y2="23"></line>
+          </svg>
+        </button>
+
+        <input type="text" id="textInput" class="text-input" placeholder="Ask Alexa+ or click microphone to speak..." required />
+
+        <button type="submit" id="sendBtn" class="btn-send" title="Send" aria-label="Send message">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <line x1="22" y1="2" x2="11" y2="13"></line>
+            <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+          </svg>
+        </button>
+      </form>
+    </footer>
+  </div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

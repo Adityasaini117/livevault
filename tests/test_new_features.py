@@ -301,8 +301,57 @@ class TestNewFeatures(unittest.TestCase):
         })
 
         brief = morning_brief()
-        self.assertIn("Gym Auto-Renew due on", brief)
-        self.assertIn("Parking Permit expired on", brief)
+        self.assertIn("Gym Auto-Renew renews in 3 days", brief)
+        self.assertIn("Parking Permit expired 5 days ago", brief)
+
+    def test_morning_brief_spoken_wording_examples_and_cap(self):
+        """Verifies specific natural spoken wording examples and the 5-item limit."""
+        today = date.today()
+        # 1. Equinox Gym renews in 4 days
+        d_oct16 = today + timedelta(days=4)
+        self.test_storage.add_record({
+            "type": "subscription",
+            "name": "Equinox Gym",
+            "expiry_date": d_oct16.isoformat(),
+        })
+        # 2. Verizon Fios Internet expired 13 days ago
+        d_past13 = today - timedelta(days=13)
+        self.test_storage.add_record({
+            "type": "document",
+            "name": "Verizon Fios Internet",
+            "expiry_date": d_past13.isoformat(),
+        })
+        # 3. Bill anomaly: City Electric (name doesn't contain bill -> appends bill)
+        for days_ago, amt in [(120, 118.0), (90, 118.0), (60, 118.0)]:
+            self.test_storage.add_record({
+                "type": "bill",
+                "name": "City Electric",
+                "amount": amt,
+                "purchase_date": (today - timedelta(days=days_ago)).isoformat(),
+            })
+        self.test_storage.add_record({
+            "type": "bill",
+            "name": "City Electric",
+            "amount": 168.0,
+            "purchase_date": today.isoformat(),
+        })
+
+        brief = morning_brief()
+        from server import _spoken_date
+        self.assertIn(f"Equinox Gym renews in 4 days, on {_spoken_date(d_oct16)}", brief)
+        self.assertIn(f"Verizon Fios Internet expired 13 days ago, on {_spoken_date(d_past13)}", brief)
+        self.assertIn("Your City Electric bill is 42 percent higher than usual: 168 dollars against about 118.", brief)
+
+        # Add more items to exceed 5 items
+        for i in range(4):
+            self.test_storage.add_record({
+                "type": "subscription",
+                "name": f"Extra Sub {i}",
+                "expiry_date": (today + timedelta(days=2)).isoformat(),
+            })
+
+        brief_capped = morning_brief()
+        self.assertIn("and 2 more.", brief_capped)
 
     # -------------------------------------------------------------------------
     # 5. ACCESS PROTECTION (ASGI MIDDLEWARE) TESTS

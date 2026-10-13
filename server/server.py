@@ -134,6 +134,65 @@ def _format_clarification(options: list[str]) -> str:
     return f"Did you mean {', '.join(options[:-1])}, or {options[-1]}?"
 
 
+def _spoken_date(d: date) -> str:
+    """Format a date for natural spoken speech, e.g. 'October 16'."""
+    month_name = calendar.month_name[d.month]
+    return f"{month_name} {d.day}"
+
+
+def _format_upcoming_speech(item: Dict[str, Any], today: date) -> str:
+    """Format an upcoming record naturally for speech."""
+    name = item["name"]
+    expiry_str = item.get("expiry_date")
+    rec_type = item.get("type", "").lower()
+
+    # Determine action verb based on record type
+    if rec_type == "subscription":
+        action = "renews"
+    elif rec_type == "bill":
+        action = "is due"
+    else:
+        action = "expires"
+
+    if not expiry_str:
+        return f"{name} {action} soon"
+
+    try:
+        exp_date = date.fromisoformat(expiry_str)
+        delta = (exp_date - today).days
+        spoken_d = _spoken_date(exp_date)
+        if delta == 0:
+            return f"{name} {action} today, on {spoken_d}"
+        elif delta == 1:
+            return f"{name} {action} tomorrow, on {spoken_d}"
+        else:
+            return f"{name} {action} in {delta} days, on {spoken_d}"
+    except ValueError:
+        return f"{name} {action} on {expiry_str}"
+
+
+def _format_expired_speech(item: Dict[str, Any], today: date) -> str:
+    """Format an expired record naturally for speech."""
+    name = item["name"]
+    expiry_str = item.get("expiry_date")
+
+    if not expiry_str:
+        return f"{name} expired"
+
+    try:
+        exp_date = date.fromisoformat(expiry_str)
+        delta = (today - exp_date).days
+        spoken_d = _spoken_date(exp_date)
+        if delta == 1:
+            return f"{name} expired 1 day ago, on {spoken_d}"
+        elif delta > 1:
+            return f"{name} expired {delta} days ago, on {spoken_d}"
+        else:
+            return f"{name} expired today, on {spoken_d}"
+    except ValueError:
+        return f"{name} expired on {expiry_str}"
+
+
 @mcp.tool()
 def ping() -> str:
     """Return health check status for LifeVault."""
@@ -485,10 +544,12 @@ def _detect_bill_anomalies(name: Optional[str] = None) -> Tuple[List[Dict[str, A
             pct = round(((latest["amount"] - med) / med) * 100)
             latest_val = int(latest["amount"]) if float(latest["amount"]).is_integer() else f"{latest['amount']:.2f}"
             med_val = int(round(med))
-            bill_name = latest["name"].strip()
-            if not bill_name.lower().endswith("bill"):
-                bill_name = f"{bill_name} bill"
-            msg = f"Your {bill_name.lower()} is {pct} percent higher than usual: {latest_val} dollars against about {med_val}."
+            raw_name = latest["name"].strip()
+            if "bill" in raw_name.lower():
+                bill_name = raw_name
+            else:
+                bill_name = f"{raw_name} bill"
+            msg = f"Your {bill_name} is {pct} percent higher than usual: {latest_val} dollars against about {med_val}."
             return [{
                 "name": latest["name"],
                 "pct": pct,
@@ -512,10 +573,12 @@ def _detect_bill_anomalies(name: Optional[str] = None) -> Tuple[List[Dict[str, A
             pct = round(((latest["amount"] - med) / med) * 100)
             latest_val = int(latest["amount"]) if float(latest["amount"]).is_integer() else f"{latest['amount']:.2f}"
             med_val = int(round(med))
-            bill_name = latest["name"].strip()
-            if not bill_name.lower().endswith("bill"):
-                bill_name = f"{bill_name} bill"
-            msg = f"Your {bill_name.lower()} is {pct} percent higher than usual: {latest_val} dollars against about {med_val}."
+            raw_name = latest["name"].strip()
+            if "bill" in raw_name.lower():
+                bill_name = raw_name
+            else:
+                bill_name = f"{raw_name} bill"
+            msg = f"Your {bill_name} is {pct} percent higher than usual: {latest_val} dollars against about {med_val}."
             anomalies.append({
                 "name": latest["name"],
                 "pct": pct,
@@ -634,28 +697,33 @@ def morning_brief() -> str:
     expired = storage.list_expired(14)
     anomalies, _ = _detect_bill_anomalies()
 
+    today = date.today()
     items: List[str] = []
 
     for item in upcoming:
-        items.append(f"{item['name']} due on {item['expiry_date']}")
+        items.append(_format_upcoming_speech(item, today))
 
     for item in expired:
-        items.append(f"{item['name']} expired on {item['expiry_date']}")
+        items.append(_format_expired_speech(item, today))
 
     for a in anomalies:
-        val_str = int(a['latest']) if float(a['latest']).is_integer() else f"{a['latest']:.2f}"
-        items.append(f"{a['name']} bill anomaly of {val_str} dollars")
+        items.append(a["message"])
 
     total = len(items)
     if total == 0:
         return "Good morning! You have no upcoming deadlines, recent expirations, or bill anomalies."
 
     if total <= 5:
-        return f"Here is your morning brief: {', '.join(items)}."
+        # Each item is a natural sentence/clause; join them cleanly
+        formatted_items = []
+        for it in items:
+            it = it.strip().rstrip(".")
+            formatted_items.append(it)
+        return ". ".join(formatted_items) + "."
 
-    shown = items[:5]
+    shown = [it.strip().rstrip(".") for it in items[:5]]
     remaining = total - 5
-    return f"Here is your morning brief: {', '.join(shown)}, and {remaining} more."
+    return ". ".join(shown) + f", and {remaining} more."
 
 
 @mcp.tool()

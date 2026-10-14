@@ -5,6 +5,7 @@ Python MCP SDK. Extracts tools, executes requested tool calls, and handles
 unauthorized or connection failures with clear spoken messages.
 """
 
+import sys
 from typing import Any, Dict, List, Optional, Tuple
 import httpx
 from mcp.client.session import ClientSession
@@ -77,54 +78,74 @@ async def execute_mcp_tool_turn(
                         for call in tool_calls:
                             c_name = call.get("name", "")
                             c_args = call.get("args", {}) or {}
-                            res = await session.call_tool(c_name, c_args)
+                            try:
+                                res = await session.call_tool(c_name, c_args)
 
-                            # Format text output
-                            texts = []
-                            if hasattr(res, "content") and res.content:
-                                for part in res.content:
-                                    if hasattr(part, "text"):
-                                        texts.append(part.text)
-                                    else:
-                                        texts.append(str(part))
-                            output_str = "\n".join(texts) if texts else str(res)
-                            execution_results.append({
-                                "name": c_name,
-                                "args": c_args,
-                                "result": output_str,
-                            })
+                                # Format text output
+                                texts = []
+                                if hasattr(res, "content") and res.content:
+                                    for part in res.content:
+                                        if hasattr(part, "text"):
+                                            texts.append(part.text)
+                                        else:
+                                            texts.append(str(part))
+                                output_str = "\n".join(texts) if texts else str(res)
+                                is_err = getattr(res, "is_error", getattr(res, "isError", False))
+                                if is_err:
+                                    print(f"[Simulator] Tool call '{c_name}' returned error: {output_str}", file=sys.stderr)
+                                execution_results.append({
+                                    "name": c_name,
+                                    "args": c_args,
+                                    "result": output_str,
+                                })
+                            except Exception as tool_exc:
+                                # When a tool call raises (e.g. MCPError), log to console (never token or headers)
+                                # and pass error text back to Gemini as tool result
+                                exc_type = type(tool_exc).__name__
+                                exc_msg = str(tool_exc)
+                                print(f"[Simulator] Tool call '{c_name}' raised {exc_type}: {exc_msg}", file=sys.stderr)
+                                execution_results.append({
+                                    "name": c_name,
+                                    "args": c_args,
+                                    "result": f"Error executing tool {c_name} ({exc_type}): {exc_msg}",
+                                })
 
                     return tools_meta, execution_results
 
     except BaseException as e:
         underlying = _extract_nested_exception(e) or e
+        exc_type = type(underlying).__name__
+        exc_msg = str(underlying)
+
+        # Log exception type and message to simulator console, NEVER token or headers
+        print(f"[Simulator Connection Error] {exc_type}: {exc_msg}", file=sys.stderr)
 
         # Check for 401 Unauthorized
         if isinstance(underlying, httpx.HTTPStatusError) and underlying.response.status_code == 401:
             if clean_token:
-                raise MCPConnectionError("The LifeVault server rejected the access token. Check the token in settings.")
+                raise MCPConnectionError("The LifeVault server rejected the access token (HTTP 401). Check the token in settings.")
             else:
-                raise MCPConnectionError("The LifeVault server requires an access token. Please provide one in settings.")
+                raise MCPConnectionError("The LifeVault server requires an access token (HTTP 401). Please provide one in settings.")
 
         # Check for MCPError carrying 401 or Unauthorized
         if isinstance(underlying, MCPError):
-            err_msg = str(underlying).lower()
+            err_msg = exc_msg.lower()
             if "unauthorized" in err_msg or "401" in err_msg:
                 if clean_token:
-                    raise MCPConnectionError("The LifeVault server rejected the access token. Check the token in settings.")
+                    raise MCPConnectionError("The LifeVault server rejected the access token (HTTP 401). Check the token in settings.")
                 else:
-                    raise MCPConnectionError("The LifeVault server requires an access token. Please provide one in settings.")
-            raise MCPConnectionError("The LifeVault server returned an error: " + str(underlying))
+                    raise MCPConnectionError("The LifeVault server requires an access token (HTTP 401). Please provide one in settings.")
+            raise MCPConnectionError(f"The LifeVault server returned an error ({exc_type}): {exc_msg}")
 
         # Check for connection problems
         if isinstance(underlying, (httpx.ConnectError, httpx.ConnectTimeout)):
-            raise MCPConnectionError("I couldn't reach the LifeVault server. Make sure it is running and the URL is correct.")
+            raise MCPConnectionError(f"I couldn't reach the LifeVault server ({exc_type}). Make sure it is running and the URL is correct.")
 
         if isinstance(underlying, httpx.TimeoutException):
-            raise MCPConnectionError("The LifeVault server took too long to respond.")
+            raise MCPConnectionError(f"The LifeVault server took too long to respond ({exc_type}).")
 
         # Check for HTTPStatusError other than 401
         if isinstance(underlying, httpx.HTTPStatusError):
             raise MCPConnectionError(f"The LifeVault server returned HTTP {underlying.response.status_code}.")
 
-        raise MCPConnectionError("I encountered an issue connecting to the LifeVault server.")
+        raise MCPConnectionError(f"I encountered an issue connecting to the LifeVault server ({exc_type}).")

@@ -36,13 +36,20 @@ if not _api_token or not _api_token.strip():
 
 
 def _handle_storage_errors(func):
-    """Decorator to catch StorageError and return a friendly spoken message."""
+    """Decorator to catch StorageError and unexpected exceptions, returning friendly spoken messages."""
     @functools.wraps(func)
     def wrapper(*args, **kwargs):
         try:
             return func(*args, **kwargs)
         except StorageError as e:
+            # Preserve existing friendly StorageError messages
             return str(e)
+        except Exception as e:
+            # Log exception type and message to the server console, never headers or tokens
+            exc_type = type(e).__name__
+            exc_msg = str(e)
+            print(f"[Server Error in {func.__name__}] {exc_type}: {exc_msg}", file=sys.stderr)
+            return "I encountered an issue processing that request. Please try again."
     return wrapper
 
 
@@ -220,6 +227,7 @@ def _format_expired_speech(item: Dict[str, Any], today: date) -> str:
 
 
 @mcp.tool()
+@_handle_storage_errors
 def ping() -> str:
     """Return health check status for LifeVault."""
     return "LifeVault is alive"
@@ -241,8 +249,8 @@ def add_record(
 
     Computes expiry date and reminder date when warranty_months is supplied.
     """
-    clean_type = type.strip().lower()
-    clean_name = name.strip()
+    clean_type = str(type).strip().lower() if type is not None else ""
+    clean_name = str(name).strip() if name is not None else ""
 
     if not clean_name:
         return "Please provide a name for the record."
@@ -250,14 +258,20 @@ def add_record(
     if clean_type not in VALID_TYPES:
         return "Please specify a valid record type: warranty, subscription, insurance, bill, or document."
 
-    if amount is not None and amount < 0:
-        return "Amount cannot be negative."
+    amount_val = None
+    if amount is not None:
+        try:
+            amount_val = float(amount)
+            if amount_val < 0:
+                return "Amount cannot be negative."
+        except (ValueError, TypeError):
+            return "Please provide a valid amount."
 
     # Validate or default purchase date
-    if purchase_date:
+    if purchase_date is not None and str(purchase_date).strip():
         try:
-            p_date = date.fromisoformat(purchase_date.strip())
-        except ValueError:
+            p_date = date.fromisoformat(str(purchase_date).strip())
+        except (ValueError, TypeError):
             return "Please provide purchase_date in YYYY-MM-DD format."
     else:
         p_date = date.today()
@@ -266,9 +280,13 @@ def add_record(
     reminder_date_str = None
 
     if warranty_months is not None:
-        if warranty_months < 0:
-            return "Warranty months cannot be negative."
-        expiry_d = _add_months(p_date, warranty_months)
+        try:
+            w_months = int(warranty_months)
+            if w_months < 0:
+                return "Warranty months cannot be negative."
+        except (ValueError, TypeError):
+            return "Please provide a valid number of warranty months."
+        expiry_d = _add_months(p_date, w_months)
         reminder_d = expiry_d - timedelta(days=30)
         expiry_date_str = expiry_d.isoformat()
         reminder_date_str = reminder_d.isoformat()
@@ -276,14 +294,14 @@ def add_record(
     record_data = {
         "type": clean_type,
         "name": clean_name,
-        "vendor": vendor.strip() if vendor else None,
-        "amount": round(float(amount), 2) if amount is not None else None,
+        "vendor": str(vendor).strip() if vendor else None,
+        "amount": round(amount_val, 2) if amount_val is not None else None,
         "currency": "USD",
         "purchase_date": p_date.isoformat(),
         "expiry_date": expiry_date_str,
-        "renewal_cycle": renewal_cycle.strip() if renewal_cycle else None,
+        "renewal_cycle": str(renewal_cycle).strip() if renewal_cycle else None,
         "reminder_date": reminder_date_str,
-        "notes": notes.strip() if notes else None,
+        "notes": str(notes).strip() if notes else None,
     }
 
     created = storage.add_record(record_data)
@@ -299,13 +317,14 @@ def add_record(
 
 
 @mcp.tool()
+@_handle_storage_errors
 def add_record_from_text(text: str) -> str:
     """Extract and save a life-admin record from natural language voice transcript.
 
     Dispatches to AI provider (Gemini or Bedrock) to extract type, name, vendor,
     amount, purchase date, warranty months, and renewal cycle.
     """
-    clean_text = text.strip() if text else ""
+    clean_text = str(text).strip() if text else ""
     if not clean_text:
         return "Please tell me what record you'd like to save."
 
@@ -377,7 +396,7 @@ def add_record_from_text(text: str) -> str:
 @_handle_storage_errors
 def find_record(query: str) -> str:
     """Find records matching a search query by name, vendor, or notes."""
-    clean_query = query.strip()
+    clean_query = str(query).strip() if query else ""
     if not clean_query:
         return "Please specify what record to find."
 
@@ -404,7 +423,7 @@ def find_record(query: str) -> str:
 @_handle_storage_errors
 def warranty_status(item: str) -> str:
     """Check if an item is under warranty, expiry date, and days remaining or past."""
-    clean_item = item.strip()
+    clean_item = str(item).strip() if item else ""
     if not clean_item:
         return "Please specify an item to check warranty status."
 
@@ -426,7 +445,11 @@ def warranty_status(item: str) -> str:
     if not expiry_str:
         return f"Your {match['name']} is on file, but has no expiry date recorded."
 
-    expiry_date = date.fromisoformat(expiry_str)
+    try:
+        expiry_date = date.fromisoformat(expiry_str)
+    except (ValueError, TypeError):
+        return f"Your {match['name']} is on file, but its expiry date is not formatted correctly."
+
     today = date.today()
     delta_days = (expiry_date - today).days
 
@@ -441,12 +464,27 @@ def warranty_status(item: str) -> str:
 @_handle_storage_errors
 def upcoming_deadlines(days: int = 30) -> str:
     """List warranties, renewals, bills, and document expiries due in the next N days."""
-    if days <= 0:
+    try:
+        days_int = int(days)
+    except (ValueError, TypeError):
+        return "Please specify a valid number of days."
+
+    if days_int <= 0:
         return "Please specify a positive number of days."
 
-    upcoming = storage.list_upcoming(days)
+    upcoming = storage.list_upcoming(days_int)
     if not upcoming:
-        return f"You have no upcoming deadlines in the next {days} days."
+        return f"You have no upcoming deadlines in the next {days_int} days."
+
+    total = len(upcoming)
+    display_items = upcoming[:5]
+    spoken_list = [f"{item['name']} on {item['expiry_date']}" for item in display_items]
+
+    if total <= 5:
+        return f"You have {total} upcoming deadline{'s' if total != 1 else ''}: {', '.join(spoken_list)}."
+
+    remaining = total - 5
+    return f"You have {total} upcoming deadlines: {', '.join(spoken_list)}, and {remaining} more."
 
     total = len(upcoming)
     display_items = upcoming[:5]
@@ -462,13 +500,29 @@ def upcoming_deadlines(days: int = 30) -> str:
 @mcp.tool()
 @_handle_storage_errors
 def spending_summary(period: str) -> str:
-    """Summarize spending total and top category for 'this month', 'last month', or 'this year'."""
-    clean_period = period.strip().lower()
+    """Summarize spending total and top category for today, this week, last week, this month, last month, this year, or last year."""
+    if not period or not isinstance(period, str) or not period.strip():
+        return "I can only summarize spending for today, this week, last week, this month, last month, this year, or last year. Please specify one of these periods."
+
+    clean_period = period.strip().lower().rstrip("?.!,")
     today = date.today()
 
-    if clean_period == "this month":
+    if clean_period == "today":
+        start_date = today
+        end_date = today
+        range_desc = f"on {today.strftime('%A, %B')} {today.day}"
+    elif clean_period == "this week":
+        start_date = today - timedelta(days=today.weekday())
+        end_date = start_date + timedelta(days=6)
+        range_desc = f"since {start_date.strftime('%A, %B')} {start_date.day}"
+    elif clean_period == "last week":
+        start_date = today - timedelta(days=today.weekday() + 7)
+        end_date = start_date + timedelta(days=6)
+        range_desc = f"from {start_date.strftime('%A, %B')} {start_date.day} to {end_date.strftime('%A, %B')} {end_date.day}"
+    elif clean_period == "this month":
         start_date = date(today.year, today.month, 1)
         end_date = today
+        range_desc = f"since {start_date.strftime('%B')} 1"
     elif clean_period == "last month":
         if today.month == 1:
             lm_year = today.year - 1
@@ -479,21 +533,28 @@ def spending_summary(period: str) -> str:
         _, last_day = calendar.monthrange(lm_year, lm_month)
         start_date = date(lm_year, lm_month, 1)
         end_date = date(lm_year, lm_month, last_day)
+        range_desc = f"in {start_date.strftime('%B %Y')}"
     elif clean_period == "this year":
         start_date = date(today.year, 1, 1)
         end_date = today
+        range_desc = f"since January 1, {today.year}"
+    elif clean_period == "last year":
+        ly_year = today.year - 1
+        start_date = date(ly_year, 1, 1)
+        end_date = date(ly_year, 12, 31)
+        range_desc = f"in {ly_year}"
     else:
-        return "Please specify 'this month', 'last month', or 'this year' for spending summary."
+        return "I can only summarize spending for today, this week, last week, this month, last month, this year, or last year. Please specify one of these periods."
 
     summary = storage.spending_by_period(start_date.isoformat(), end_date.isoformat())
 
     if summary["total"] <= 0:
-        return f"You have no recorded spending for {clean_period}."
+        return f"You have no recorded spending {clean_period}, {range_desc}."
 
     top_cat = summary["top_category"] or "general"
     top_amt = summary["top_amount"]
     return (
-        f"You spent ${summary['total']:.2f} {clean_period}, with {top_cat} "
+        f"You spent ${summary['total']:.2f} {clean_period}, {range_desc}, with {top_cat} "
         f"being your highest category at ${top_amt:.2f}."
     )
 
@@ -502,7 +563,7 @@ def spending_summary(period: str) -> str:
 @_handle_storage_errors
 def delete_record(name: str, confirm: bool = False) -> str:
     """Delete a record by name. Requires confirm=True to permanently delete."""
-    clean_name = name.strip()
+    clean_name = str(name).strip() if name else ""
     if not clean_name:
         return "Please specify the name of the record to delete."
 
@@ -520,7 +581,8 @@ def delete_record(name: str, confirm: bool = False) -> str:
     else:
         target = matches[0]
 
-    if not confirm:
+    is_confirmed = confirm is True or str(confirm).strip().lower() in ("true", "1", "yes")
+    if not is_confirmed:
         return f"Are you sure you want to delete the record for {target['name']}? Please confirm to proceed."
 
     storage.delete_record(target["id"])
@@ -756,7 +818,7 @@ def morning_brief() -> str:
 @_handle_storage_errors
 def draft_warranty_claim(item: str) -> str:
     """Draft a ready-to-send warranty claim email using stored record details."""
-    clean_item = item.strip() if item else ""
+    clean_item = str(item).strip() if item else ""
     if not clean_item:
         return "Please specify an item to draft a warranty claim for."
 
@@ -815,7 +877,7 @@ def draft_warranty_claim(item: str) -> str:
 @_handle_storage_errors
 def bill_anomalies(name: Optional[str] = None) -> str:
     """Check for bill anomalies where the latest amount exceeds the earlier median by > 25%."""
-    clean_name = name.strip() if name and name.strip() else None
+    clean_name = str(name).strip() if name and str(name).strip() else None
     anomalies, override = _detect_bill_anomalies(clean_name)
     if override:
         return override

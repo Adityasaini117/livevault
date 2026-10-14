@@ -40,7 +40,7 @@ def _get_gemini_client() -> Tuple[genai.Client, str]:
     if not api_key or api_key in ("your_gemini_api_key_here", ""):
         raise LLMError("I couldn't process that because the Gemini API key is missing. Please set GEMINI_API_KEY in the simulator .env file.")
 
-    model = os.getenv("GEMINI_MODEL", "gemini-2.5-flash").strip()
+    model = os.getenv("GEMINI_MODEL", "gemini-3.5-flash-lite").strip()
     return genai.Client(api_key=api_key), model
 
 

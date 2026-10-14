@@ -31,6 +31,7 @@ from server import (
     draft_warranty_claim,
     morning_brief,
     renew_record,
+    spending_summary,
 )
 
 
@@ -448,6 +449,70 @@ class TestNewFeatures(unittest.TestCase):
             asyncio.run(middleware({"type": "http", "path": path, "headers": []}, None, send_res))
             self.assertEqual(events[0]["status"], 404, f"Path {path} did not return 404")
             self.assertEqual(events[1]["body"], b'{"error": "Not Found"}')
+
+    # -------------------------------------------------------------------------
+    # 5. SPENDING SUMMARY TESTS
+    # -------------------------------------------------------------------------
+
+    def test_spending_summary_this_week_with_records(self):
+        """spending_summary with 'this week' returns spoken total, top category, and range."""
+        today = date.today()
+        # Add a record within this week (today)
+        self.test_storage.add_record({
+            "type": "bill",
+            "name": "Midweek Internet Bill",
+            "amount": 75.50,
+            "purchase_date": today.isoformat(),
+        })
+
+        res = spending_summary("this week")
+        self.assertIn("75.50", res)
+        self.assertIn("this week", res)
+        self.assertIn("bill", res)
+        # Verify covered range is mentioned (e.g. "since Monday, October 12")
+        self.assertIn("since", res.lower())
+
+    def test_spending_summary_this_week_no_records(self):
+        """spending_summary with 'this week' when no spending exists returns friendly spoken range."""
+        res = spending_summary("this week")
+        self.assertIn("no recorded spending", res.lower())
+        self.assertIn("this week", res.lower())
+        self.assertIn("since", res.lower())
+
+    def test_spending_summary_unknown_period(self):
+        """spending_summary with an unknown period returns friendly sentence listing supported periods without raising."""
+        for unknown in ["1999", "how much did I spend in 1999", "last century", "random_period"]:
+            res = spending_summary(unknown)
+            self.assertIn("today", res)
+            self.assertIn("this week", res)
+            self.assertIn("last week", res)
+            self.assertIn("this month", res)
+            self.assertIn("last month", res)
+            self.assertIn("this year", res)
+            self.assertIn("last year", res)
+
+    def test_spending_summary_edge_cases_no_raise(self):
+        """spending_summary handles None, whitespace, empty, and non-string inputs safely."""
+        for val in [None, "", "   ", 1999, False, [], {}]:
+            res = spending_summary(val)
+            self.assertIsInstance(res, str)
+            self.assertIn("today", res)
+            self.assertIn("this week", res)
+
+    def test_spending_summary_case_and_whitespace_insensitivity(self):
+        """spending_summary trims whitespace and is case-insensitive for all supported periods."""
+        today = date.today()
+        self.test_storage.add_record({
+            "type": "subscription",
+            "name": "Daily Pass",
+            "amount": 10.00,
+            "purchase_date": today.isoformat(),
+        })
+
+        for p in ["  THIS WEEK  ", "  Today  ", "Last Week", "THIS MONTH", "last Month", "This Year", "LAST YEAR"]:
+            res = spending_summary(p)
+            self.assertIsInstance(res, str)
+            self.assertNotIn("I can only summarize spending for", res)
 
 
 if __name__ == "__main__":

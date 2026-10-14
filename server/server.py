@@ -32,7 +32,10 @@ from storage import get_storage, StorageError, VALID_TYPES
 # Check API token on startup and print warning if not configured
 _api_token = os.getenv("LIFEVAULT_API_TOKEN")
 if not _api_token or not _api_token.strip():
-    print("WARNING: LIFEVAULT_API_TOKEN is not set. Access protection is disabled.")
+    if os.getenv("LAMBDA_MODE") == "1":
+        print("WARNING: LIFEVAULT_API_TOKEN is not set in LAMBDA_MODE. Access protection is failing closed.", file=sys.stderr)
+    else:
+        print("WARNING: LIFEVAULT_API_TOKEN is not set. Access protection is disabled.")
 
 
 def _handle_storage_errors(func):
@@ -66,11 +69,6 @@ class ApiTokenAuthMiddleware:
             await self.app(scope, receive, send)
             return
 
-        # If token is not set, access protection is disabled (local testing)
-        if not self.expected_token:
-            await self.app(scope, receive, send)
-            return
-
         path = scope.get("path", "")
 
         # Return 404 for OAuth discovery and endpoint paths so clients do not assume OAuth is supported
@@ -95,6 +93,32 @@ class ApiTokenAuthMiddleware:
         if not (path == "/mcp" or path.startswith("/mcp/")):
             await self.app(scope, receive, send)
             return
+
+        # If token is not set:
+        # In Lambda mode (LAMBDA_MODE=1), fail closed to reject all requests and log a warning.
+        # Locally (LAMBDA_MODE != 1), access protection is disabled for frictionless local development.
+        if not self.expected_token:
+            if os.getenv("LAMBDA_MODE") == "1":
+                print("WARNING: LIFEVAULT_API_TOKEN is not set in LAMBDA_MODE. Failing closed, rejecting request.", file=sys.stderr)
+                body = b'{"error": "Unauthorized: LIFEVAULT_API_TOKEN is not configured"}'
+                await send({
+                    "type": "http.response.start",
+                    "status": 401,
+                    "headers": [
+                        (b"content-type", b"application/json"),
+                        (b"content-length", str(len(body)).encode("ascii")),
+                        (b"www-authenticate", b"Bearer"),
+                    ],
+                })
+                await send({
+                    "type": "http.response.body",
+                    "body": body,
+                    "more_body": False,
+                })
+                return
+            await self.app(scope, receive, send)
+            return
+
 
         # Extract Authorization header without logging
         auth_header = None

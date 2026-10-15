@@ -27,6 +27,7 @@ except ImportError:
     from mcp.server.fastmcp import FastMCP
 
 from ai import extract_record, AIError
+from privacy import is_sensitive, PRIVACY_REJECTION_MESSAGE
 from storage import get_storage, StorageError, VALID_TYPES
 
 # Check API token on startup and print warning if not configured
@@ -279,6 +280,10 @@ def add_record(
     if not clean_name:
         return "Please provide a name for the record."
 
+    for field in (clean_name, vendor, notes, renewal_cycle):
+        if field and is_sensitive(str(field)):
+            return PRIVACY_REJECTION_MESSAGE
+
     if clean_type not in VALID_TYPES:
         return "Please specify a valid record type: warranty, subscription, insurance, bill, or document."
 
@@ -351,6 +356,9 @@ def add_record_from_text(text: str) -> str:
     clean_text = str(text).strip() if text else ""
     if not clean_text:
         return "Please tell me what record you'd like to save."
+
+    if is_sensitive(clean_text):
+        return PRIVACY_REJECTION_MESSAGE
 
     try:
         data = extract_record(clean_text, date.today())
@@ -613,6 +621,39 @@ def delete_record(name: str, confirm: bool = False) -> str:
     return f"The record for {target['name']} has been deleted."
 
 
+@mcp.tool()
+@_handle_storage_errors
+def export_my_data() -> str:
+    """Export all stored life-admin records for the current user as concise JSON.
+
+    Caps output at 100 records to prevent overflowing conversational context.
+    """
+    records = storage.list_records()
+    if not records:
+        return "You have no records stored in LifeVault."
+
+    total = len(records)
+    capped = records[:100]
+    data_json = json.dumps(capped, indent=2)
+    if total > 100:
+        remaining = total - 100
+        return f"{data_json}\n\n... and {remaining} more records."
+    return data_json
+
+
+@mcp.tool()
+@_handle_storage_errors
+def delete_all_data(confirm: bool = False) -> str:
+    """Delete all life-admin records for the default user. Requires confirm=True after a spoken confirmation question."""
+    is_confirmed = confirm is True or str(confirm).strip().lower() in ("true", "1", "yes")
+    if not is_confirmed:
+        return "Are you sure you want to delete all your records? This cannot be undone. Please confirm to proceed."
+
+    storage.clear_all()
+    return "All your records have been permanently deleted."
+
+
+
 def _detect_bill_anomalies(name: Optional[str] = None) -> Tuple[List[Dict[str, Any]], Optional[str]]:
     """Detect bill anomalies where the latest bill is > 25% above earlier median.
 
@@ -714,6 +755,10 @@ def renew_record(
     clean_name = name.strip() if name else ""
     if not clean_name:
         return "Please specify the name of the record to renew."
+
+    for field in (clean_name, new_expiry_date):
+        if field and is_sensitive(str(field)):
+            return PRIVACY_REJECTION_MESSAGE
 
     matches = storage.search_records(clean_name)
     if not matches:

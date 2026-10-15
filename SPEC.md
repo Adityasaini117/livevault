@@ -13,7 +13,7 @@ LifeVault securely stores a person's private life-admin records (warranties, sub
 - **Language & Runtime**: Python 3.10+
 - **Protocol**: MCP Python SDK (FastMCP), Streamable HTTP transport (spec 2025-11-25 or later) hosted at `http://localhost:8000/mcp`
 - **Storage Layer**: Pluggable storage behind the abstract `Storage` interface supporting SQLite (`lifevault.db`) for local development and Amazon DynamoDB for cloud deployment, selectable via `STORAGE_BACKEND`.
-- **AWS Services**: Amazon DynamoDB, Amazon Bedrock (Converse API), Amazon S3, Amazon Textract, Amazon SNS
+- **AWS Services**: Amazon DynamoDB (single-table records storage), Amazon Bedrock (Converse API AI extraction), AWS Lambda (Function URL deployment with Mangum ASGI adapter)
 
 ---
 
@@ -39,6 +39,20 @@ LifeVault includes a pluggable AI extraction interface in `/server/ai.py` that p
 - `morning_brief()`: Delivers a short spoken daily summary covering deadlines due in the next 7 days, items expired in the last 14 days, and detected bill anomalies.
 - `draft_warranty_claim(item)`: Generates a ready-to-send warranty claim email draft using strictly stored details, with placeholders for unknown fields and expiration notices.
 - `bill_anomalies(name=None)`: Detects recurring bill spikes by comparing the latest bill against the median of at least 3 earlier bills (> 25% threshold).
+- `export_my_data()`: Exports all stored life-admin records for the current user as concise JSON, capped at 100 records to prevent blowing conversational context.
+- `delete_all_data(confirm=False)`: Permanently deletes all records belonging to the default user after explicit user confirmation without dropping or altering database tables.
+
+---
+
+## Privacy Guardrails
+
+LifeVault implements strict privacy filters to prevent storing or sending sensitive financial and identity credentials:
+- **Sensitive-Data Filter**: Rejects card-number-like digit runs (Luhn-valid 13–19 digits), CVV/PIN/password/OTP phrasing, bank account/IBAN patterns, and SSN/Aadhaar/passport IDs.
+- **Friendly Voice Rejection**: Returns `"I can't store card numbers, passwords or ID numbers. Tell me just the item and dates."` whenever sensitive data is intercepted.
+- **Strict Redaction**: Matched values are never echoed, logged, or stored, and are excluded from exception messages.
+- **Pre-Execution Boundary**: Sensitive-data checks execute prior to making any external AI provider API calls or database writes.
+- **Non-Destructive Table Deletions**: `delete_all_data(confirm=True)` deletes only items under partition key `USER#default` (or executes `DELETE FROM records` in SQLite) and never drops the database table.
+- **Filter Limitations**: The privacy guardrail filter is pattern- and heuristic-based (regex and checksum algorithms) and is not guaranteed to catch every conceivable format, obfuscation, or novel identifier. Users should never speak or submit passwords, financial account credentials, or government ID numbers.
 
 ---
 

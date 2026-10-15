@@ -76,6 +76,11 @@ class Storage(ABC):
         """Calculate spending total and category breakdown between start and end dates (inclusive)."""
         pass
 
+    @abstractmethod
+    def clear_all(self) -> None:
+        """Clear all records for the default user without dropping table schemas."""
+        pass
+
 
 class SqliteStorage(Storage):
     """SQLite implementation of the Storage interface using built-in sqlite3."""
@@ -328,8 +333,15 @@ class SqliteStorage(Storage):
             }
 
     def clear_all(self) -> None:
-        """Clear all records from database. Used for reseeding."""
-        self.init_db(drop_existing=True)
+        """Clear all records from database without dropping the table."""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM records")
+            try:
+                cursor.execute("DELETE FROM sqlite_sequence WHERE name = 'records'")
+            except sqlite3.OperationalError:
+                pass
+            conn.commit()
 
 
 def get_storage(backend: Optional[str] = None, **kwargs: Any) -> Storage:

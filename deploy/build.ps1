@@ -1,4 +1,4 @@
-# build.ps1 - Package LifeVault MCP Server for AWS Lambda (ap-southeast-2)
+﻿# build.ps1 - Package LifeVault MCP Server for AWS Lambda (ap-southeast-2)
 # Runtime: Python 3.13 (python3.13, x86_64)
 
 [CmdletBinding()]
@@ -125,7 +125,7 @@ Get-ChildItem -Path $BuildDir -Recurse -File | Where-Object {
 
 # 4. Copy server application code
 Write-Host "`nCopying /server code into package..."
-$ServerFiles = @("server.py", "storage.py", "storage_dynamodb.py", "ai.py", "create_table.py", "requirements.txt")
+$ServerFiles = @("server.py", "privacy.py", "storage.py", "storage_dynamodb.py", "ai.py", "create_table.py", "requirements.txt")
 foreach ($file in $ServerFiles) {
     $src = Join-Path $ServerDir $file
     if (Test-Path $src) {
@@ -226,3 +226,4 @@ if (-not $KeepBuildDir) {
 }
 
 Write-Host "`nBuild complete successfully! deploy/package.zip is ready for deployment."
+

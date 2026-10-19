@@ -26,3 +26,5 @@ dist/
 .aws/
 deploy/package.zip
 deploy/.build/
+deploy/package.zip
+deploy/.build/

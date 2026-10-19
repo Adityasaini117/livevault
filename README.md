@@ -1,13 +1,16 @@
 # LifeVault
 
 > **Voice-first life-admin assistant via the Model Context Protocol (MCP)**  
-> *"Never miss a warranty, renewal, or deadline again."*
+> *"Never miss a warranty, renewal, or deadline again."*  
+> **MCP spec 2025-11-25 compliant, Streamable HTTP.**
 
 ---
 
 ## What is LifeVault?
 
-LifeVault is a voice-first life-admin assistant prototype that exposes personal document, warranty, bill, and subscription tracking to conversational clients (such as Alexa+ or the included web simulator) through an open Model Context Protocol (MCP) server. By connecting natural voice queries to an authoritative personal data vault, LifeVault transforms fragmented receipts, policies, and renewal dates into timely spoken answers, proactive morning briefings, and automated claim drafts.
+LifeVault is a voice-first life-admin assistant prototype that exposes personal document, warranty, bill, and subscription tracking to conversational clients (such as Alexa+ or the included web simulator) through an open **MCP spec 2025-11-25 compliant, Streamable HTTP** server. 
+
+AI providers are **pluggable: Amazon Bedrock (AWS) or Google Gemini (free-tier fallback)**. The server defaults to Gemini for zero-cost local execution; the Amazon Bedrock Claude-3 Haiku implementation is fully written with error handling and fallback paths, but has not yet been run live against AWS. By connecting natural voice queries to an authoritative personal data vault, LifeVault transforms fragmented receipts, policies, and renewal dates into timely spoken answers, proactive morning briefings, and automated claim drafts.
 
 ---
 
@@ -24,7 +27,7 @@ General-purpose voice assistants like Alexa+ are conversational orchestrators, b
 
 ## Architecture
 
-The system operates over the standard MCP Streamable HTTP transport with Bearer token security and pluggable AI/storage backends:
+The system operates over the standard **MCP spec 2025-11-25 compliant, Streamable HTTP** transport with Bearer token security, pluggable storage backends (SQLite or DynamoDB), and **pluggable AI providers (Amazon Bedrock on AWS or Google Gemini as a free-tier fallback)**:
 
 ```mermaid
 flowchart TD
@@ -34,7 +37,7 @@ flowchart TD
     end
 
     subgraph Transport["Transport & Security"]
-        StreamableHTTP["Streamable HTTP Transport<br/>(http://localhost:8000/mcp)"]
+        StreamableHTTP["Streamable HTTP Transport<br/>(MCP spec 2025-11-25 compliant)<br/>(http://localhost:8000/mcp)"]
         AuthMiddleware["ApiTokenAuthMiddleware<br/>• Bearer Auth (Constant-Time Compare)<br/>• Fail-Closed in Lambda Mode"]
     end
 
@@ -45,8 +48,8 @@ flowchart TD
     end
 
     subgraph AIProviders["Pluggable AI Providers"]
-        Gemini["Google Gemini (Default)<br/>google-genai SDK"]
-        Bedrock["AWS Bedrock (Converse API)<br/>anthropic.claude-3-haiku"]
+        Bedrock["Amazon Bedrock (AWS)<br/>anthropic.claude-3-haiku<br/>(Coded, not yet run live)"]
+        Gemini["Google Gemini (Free-tier fallback / default)<br/>google-genai SDK"]
     end
 
     subgraph StorageBackends["Pluggable Storage Layer (Abstract Interface)"]
@@ -80,7 +83,7 @@ LifeVault exposes 14 specialized MCP tools designed for natural, concise voice r
 | `find_record` | `query` | Searches records by name, vendor, or notes. Asks clarifying questions on ambiguity. | *"Find my car insurance policy."* |
 | `warranty_status` | `item` | Checks whether an item is under warranty, days remaining, or days expired. | *"Is my MacBook still under warranty?"* |
 | `upcoming_deadlines` | `days=30` | Lists upcoming warranties, renewals, and bills due within $N$ days. | *"What deadlines are coming up this month?"* |
-| `spending_summary` | `period` | Aggregates spend for `"this month"`, `"last month"`, or `"this year"`. | *"How much did I spend on subscriptions last month?"* |
+| `spending_summary` | `period` | Aggregates spend for today, this/last week, this/last month, this/last year. | *"How much did I spend on subscriptions last month?"* |
 | `delete_record` | `name`, `confirm=False` | Deletes a record with mandatory explicit voice confirmation. | *"Delete my old gym membership."* |
 | `export_my_data` | *None* | Exports all stored records for the user as JSON (capped at 100). | *"Export all my stored records."* |
 | `delete_all_data` | `confirm=False` | Permanently deletes all records for the user after explicit voice confirmation. | *"Delete all my data from LifeVault."* |
@@ -99,14 +102,14 @@ LifeVault supports local execution and cloud architectures:
   - **Region**: `ap-southeast-2` (Sydney), configurable via `AWS_REGION`.
   - **Schema**: Single-table (`lifevault-records`) using partition key `pk` (`USER#default`) and sort key `sk` (`REC#0000000001`).
   - **Atomic Counter**: Monotonically increasing record IDs generated atomically via DynamoDB `ADD last_id :inc` on `sk=COUNTER`.
-  - **Verification**: Fully verified locally through automated unit and storage contract tests using `moto.mock_aws`.
+  - **Verification**: Fully verified locally through automated unit and storage contract tests using `moto.mock_aws`. Also used live through the server, Lambda and simulator.
 - **Amazon Bedrock (Converse API)**:
-  - **Implementation**: Enterprise LLM extraction implemented in [`server/ai.py`](file:///c:/Projects/stockpilot-ai/server/ai.py) using the `boto3` Bedrock-Runtime `converse()` API (`anthropic.claude-3-haiku-20240307-v1:0`).
+  - **Implementation**: Enterprise LLM extraction implemented in [`server/ai.py`](server/ai.py) using the `boto3` Bedrock-Runtime `converse()` API (`anthropic.claude-3-haiku-20240307-v1:0`).
   - **Status**: The code and error-handling paths are fully written. *Bedrock was never run against live AWS to prevent unmocked external cloud charges.*
 - **AWS Lambda & Function URL**:
-  - **Implementation**: Mangum ASGI adapter in [`deploy/lambda_handler.py`](file:///c:/Projects/stockpilot-ai/deploy/lambda_handler.py) with stateless JSON transport and Function URL support.
-  - **Packaging**: Built locally via [`deploy/build.ps1`](file:///c:/Projects/stockpilot-ai/deploy/build.ps1) producing `deploy/package.zip` targeting `python3.13` on `manylinux2014_x86_64`.
-  - **Status**: Built and verified locally using 7 tests in `tests/test_lambda_handler.py`. *The Lambda package was tested locally and is NOT deployed to live AWS infrastructure.*
+  - **Implementation**: Mangum ASGI adapter in [`deploy/lambda_handler.py`](deploy/lambda_handler.py) with stateless JSON transport and Function URL support.
+  - **Packaging**: Built via [`deploy/build.ps1`](deploy/build.ps1) producing `deploy/package.zip` targeting `python3.13` on `manylinux2014_x86_64`.
+  - **Status**: Verified using 7 local handler tests in `tests/test_lambda_handler.py`. Deployed to AWS Lambda (ap-southeast-2) behind a Function URL and verified with curl: 401 without a token, 200 with a token, and a real tool call returned DynamoDB data.
 
 ---
 
@@ -114,7 +117,7 @@ LifeVault supports local execution and cloud architectures:
 
 - **What is Stored**: Item names, vendor/merchant, monetary amounts, purchase/expiry/reminder dates, renewal cycles, and optional notes.
 - **What is Never Stored**: Credit/debit card numbers (Luhn-valid runs), CVVs, PINs, passwords, bank account/IBAN numbers, and government ID numbers (SSN, Aadhaar, passport).
-- **Pattern-Based Filter**: Protection is enforced via a regex and heuristic pattern filter in [`server/privacy.py`](file:///c:/Projects/stockpilot-ai/server/privacy.py). *Notice: This pattern-based filter is not guaranteed against deliberate obfuscation, leetspeak, or novel ID formats.* Users should never submit credentials or sensitive identifiers.
+- **Pattern-Based Filter**: Protection is enforced via a regex and heuristic pattern filter in [`server/privacy.py`](server/privacy.py). *Notice: This pattern-based filter is not guaranteed against deliberate obfuscation, leetspeak, or novel ID formats.* Users should never submit credentials or sensitive identifiers.
 - **Single-User Prototype**: The current implementation is a single-user prototype operating on a single shared partition key (`USER#default`).
 - **Production Path**: A production multi-tenant deployment would require user account linking (OAuth 2.0 / Amazon Cognito), per-user partition isolation (`USER#<user_id>`), KMS-managed field-level encryption, and strict automated data retention policies.
 - **Data Subject Rights**: `export_my_data` allows users to retrieve all stored records, and `delete_all_data(confirm=True)` allows users to wipe their stored records on demand.
@@ -126,7 +129,7 @@ LifeVault supports local execution and cloud architectures:
 - **Bearer Token Authentication**: When `LIFEVAULT_API_TOKEN` is configured, all HTTP requests to `/mcp` must supply an `Authorization: Bearer <token>` header.
 - **Constant-Time Comparison**: Tokens are compared using `hmac.compare_digest` to prevent side-channel timing attacks.
 - **Fail-Closed in Cloud Mode**: When `LAMBDA_MODE=1`, if `LIFEVAULT_API_TOKEN` is unset or blank, the server fails closed and rejects all incoming requests with `401 Unauthorized`.
-- **Zero Secrets in Repository**: No credentials, API keys, or private tokens exist in the Git history. `.gitignore` excludes `.env*` and `.aws/`.
+- Secrets are kept out of the repository (.env* ignored, placeholders only in .env.example). GitHub push protection is enabled.
 - **Disclaimer**: LifeVault is an administrative record-keeping prototype and does not provide legal or financial advice.
 
 ---
@@ -140,8 +143,8 @@ LifeVault supports local execution and cloud architectures:
 ### 2. Environment Setup
 ```powershell
 # Clone repository
-git clone https://github.com/Adityasaini117/stockpilot-ai.git
-cd stockpilot-ai
+git clone https://github.com/Adityasaini117/livevault.git
+cd livevault
 
 # Create and activate virtual environment
 python -m venv .venv
@@ -199,7 +202,7 @@ pytest
 ## Project Layout
 
 ```text
-stockpilot-ai/
+livevault/
 ├── deploy/
 │   ├── build.ps1                       # Windows PowerShell Lambda build script
 │   ├── lambda_handler.py               # Mangum ASGI adapter for Lambda Function URL
@@ -232,6 +235,14 @@ stockpilot-ai/
 
 ---
 
+## Project History
+
+- **Initial Scope**: The repository was initially scoped as a workshop-inventory assistant ("StockPilot").
+- **Early Hackathon Pivot**: Early in the hackathon window (commit `c8da9de` on October 10, 2026, ~80 minutes after repository initialization), the project pivoted to LifeVault to solve a universal voice-first challenge: personal life administration across warranties, insurance policies, bills, and renewals.
+- **100% Window-Authored**: All code was written from scratch during the hackathon window. Verification against the `git log` confirms the initial commit (`997dada`) was authored on `2026-10-10 17:32:50 +0530`, and zero commits predate the hackathon.
+
+---
+
 ## Separate Simulator Repository
 
 The standalone Alexa+ web simulator is also maintained as an independent open-source repository:  
@@ -247,4 +258,4 @@ Antigravity (Gemini) wrote most code from SPEC.md; I designed the product, revie
 
 ## License
 
-This project is licensed under the [MIT License](file:///c:/Projects/stockpilot-ai/LICENSE).
+This project is licensed under the [MIT License](LICENSE).

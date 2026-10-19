@@ -1,19 +1,24 @@
-# Alexa+ LifeVault Simulator
+# Alexa+ Voice Simulator & MCP Test Harness
 
-A clean, voice-first Alexa+ simulator web app designed to interact with Model Context Protocol (MCP) servers (such as LifeVault) over Streamable HTTP.
+A reusable, voice-first **Alexa+ Streamable HTTP MCP test harness** designed to test and interact with any Model Context Protocol (MCP) server over the standard Streamable HTTP transport.
 
-It features voice recognition, speech synthesis, an animated Alexa visual orb, configurable connection settings, and collapsible tool inspection panels.
+While built and demonstrated with LifeVault, this harness can be pointed at **any MCP server URL** (local development or remote cloud endpoints like AWS Lambda Function URLs) and includes optional **Bearer token authentication** for secured servers.
 
-> **Note**: This application is completely standalone and imports nothing from the backend `/server`. It connects purely through standard Streamable HTTP MCP and Google Gemini APIs.
+It features bidirectional voice interaction (Web Speech API recognition + synthesis), an animated Alexa visual orb, runtime connection controls, and collapsible tool inspection panels for full visibility into tool dispatch and responses.
+
+> **Architecture & Swappable LLM**:
+> - **Standalone MCP Client**: Completely decoupled from backend application logic. It communicates strictly via standard Streamable HTTP MCP protocol messages.
+> - **Swappable LLM Engine**: Uses Google Gemini (`gemini-2.5-flash` via the `google-genai` SDK) as its default conversational agent and tool-calling orchestrator. The agentic loop in [`llm.py`](llm.py) is cleanly separated, allowing the LLM backend to be swapped for Amazon Bedrock, Anthropic Claude, OpenAI, or local models without modifying the voice UI or MCP transport layer.
 
 ---
 
 ## Features
 
+- **Reusable Test Harness**: Point to **any MCP server URL** (e.g., `http://localhost:8000/mcp`, an AWS Lambda Function URL, or a remote container) with an optional per-request **Bearer Token**.
 - **Voice In & Voice Out**: Browser Web Speech API (`SpeechRecognition`) for hands-free voice input and `SpeechSynthesis` for natural spoken Alexa responses.
 - **Text Fallback**: Full keyboard text input support with fallback notices if a browser lacks speech APIs.
-- **Streamable HTTP MCP Client**: Uses the official Python MCP SDK (`mcp.client.streamable_http`) to discover tools and invoke them dynamically.
-- **Function Calling Loop**: Integrates with Google Gemini via the official `google-genai` SDK, giving the model real-time access to MCP tools.
+- **Streamable HTTP MCP Client**: Uses the official Python MCP SDK (`mcp.client.streamable_http`) to discover tools dynamically and execute them with isolated error handling.
+- **Swappable Function Calling Loop**: Integrates out-of-the-box with Google Gemini for agentic tool use, but designed so alternative LLM providers can easily replace it.
 - **Zero Token Logging**: MCP server URLs and Bearer tokens are entered per-session in the UI settings drawer and sent per-request. Tokens are never hardcoded and never logged.
 - **Friendly Voice Error Handling**: Replaces raw stack traces with natural voice notifications for unreachable servers, 401 unauthorized errors, and Gemini quota or key issues.
 - **Collapsible Tool Tray**: View tool names, input arguments, and raw server output for complete execution visibility.

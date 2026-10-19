@@ -239,12 +239,6 @@ The standalone Alexa+ web simulator is also maintained as an independent open-so
 
 ---
 
-## Built with Antigravity
-
-Antigravity (Gemini) wrote most code from SPEC.md; I designed the product, reviewed, tested and ran it. No claims beyond that.
-
----
-
 ## License
 
 This project is licensed under the [MIT License](file:///c:/Projects/stockpilot-ai/LICENSE).

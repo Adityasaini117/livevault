@@ -24,3 +24,5 @@ dist/
 .env.*
 !.env.example
 .aws/
+deploy/package.zip
+deploy/.build/
